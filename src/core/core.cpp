@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cstdlib>
+#include <fstream>
+#include <string>
 #include <atomic>
 #include <memory>
 #include <utility>
@@ -11,6 +13,7 @@
 #include "common/cpu_features.h"
 #include "audio_core/audio_core.h"
 #include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/nx2_sampler.h"
 #include "common/adpf.h"
@@ -382,6 +385,28 @@ struct System::Impl {
             LOG_INFO(Core, "Switch 2 program: using the 12 GiB memory layout");
             Settings::values.memory_layout_mode.SetGlobal(false);
             Settings::values.memory_layout_mode.SetValue(Settings::MemoryLayout::Memory_12Gb);
+        }
+        // The KEY=VALUE lines of an env.txt in the user directory become environment variables:
+        // the EDEN_NX2_* switches, which Android has no other way to set. Each is read the first
+        // time it is used, so a change takes a restart of the app.
+        if (std::ifstream env{Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "env.txt"}) {
+            for (std::string line; std::getline(env, line);) {
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+                    line.pop_back();
+                }
+                const size_t equals = line.find('=');
+                if (line.empty() || line[0] == '#' || equals == std::string::npos || equals == 0) {
+                    continue;
+                }
+                const std::string key = line.substr(0, equals);
+                const std::string value = line.substr(equals + 1);
+#ifdef _WIN32
+                _putenv_s(key.c_str(), value.c_str());
+#else
+                setenv(key.c_str(), value.c_str(), 1);
+#endif
+                LOG_INFO(Core, "env.txt: {}={}", key, value);
+            }
         }
 
         // The Switch 2 counter runs at 31.25 MHz and its SDK converts ticks with that constant
