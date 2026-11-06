@@ -42,7 +42,7 @@ import org.yuzu.yuzu_emu.model.SetupPage
 import org.yuzu.yuzu_emu.model.PageState
 import org.yuzu.yuzu_emu.ui.main.MainActivity
 import org.yuzu.yuzu_emu.utils.DirectoryInitialization
-import org.yuzu.yuzu_emu.utils.LosslessScalingHelper
+import org.yuzu.yuzu_emu.utils.GpuDriverHelper
 import org.yuzu.yuzu_emu.utils.NativeConfig
 import org.yuzu.yuzu_emu.utils.ViewUtils
 import org.yuzu.yuzu_emu.utils.ViewUtils.setVisible
@@ -62,6 +62,9 @@ class SetupFragment : Fragment() {
     private lateinit var pages: MutableList<SetupPage>
 
     private lateinit var pageButtonCallback: SetupCallback
+
+    // Survives the view being recreated when setup opens the driver screens.
+    private var currentPage = 0
 
     companion object {
         const val KEY_NEXT_VISIBILITY = "NextButtonVisibility"
@@ -104,6 +107,13 @@ class SetupFragment : Fragment() {
 
         pages = mutableListOf<SetupPage>()
         pages.apply {
+            add(
+                SetupPage(
+                    R.drawable.ic_yuzu,
+                    R.string.welcome,
+                    R.string.welcome_description
+                ) { PageState.UNDEFINED }
+            )
             add(
                 SetupPage(
                     R.drawable.ic_permission,
@@ -205,24 +215,6 @@ class SetupFragment : Fragment() {
                         )
                         add(
                             PageButton(
-                                R.drawable.ic_duck,
-                                R.string.lossless_scaling,
-                                R.string.lossless_scaling_setup_description,
-                                {
-                                    pageButtonCallback = it
-                                    getLosslessDll.launch(arrayOf("*/*"))
-                                },
-                                {
-                                    if (LosslessScalingHelper.isInstalled()) {
-                                        ButtonState.BUTTON_ACTION_COMPLETE
-                                    } else {
-                                        ButtonState.BUTTON_ACTION_INCOMPLETE
-                                    }
-                                }
-                            )
-                        )
-                        add(
-                            PageButton(
                                 R.drawable.ic_controller,
                                 R.string.games,
                                 R.string.games_description,
@@ -260,6 +252,46 @@ class SetupFragment : Fragment() {
                     }
                 )
             )
+            if (GpuDriverHelper.isAdrenoGpu()) {
+                add(
+                    SetupPage(
+                        R.drawable.ic_graphics,
+                        R.string.setup_gpu_driver,
+                        R.string.setup_gpu_driver_description,
+                        mutableListOf<PageButton>().apply {
+                            add(
+                                PageButton(
+                                    R.drawable.ic_install,
+                                    R.string.setup_gpu_driver_download,
+                                    R.string.setup_gpu_driver_download_description,
+                                    {
+                                        binding.root.findNavController()
+                                            .navigate(R.id.driverFetcherFragment)
+                                    },
+                                    {
+                                        if (GpuDriverHelper.getDrivers().isNotEmpty()) {
+                                            ButtonState.BUTTON_ACTION_COMPLETE
+                                        } else {
+                                            ButtonState.BUTTON_ACTION_UNDEFINED
+                                        }
+                                    }
+                                )
+                            )
+                            add(
+                                PageButton(
+                                    R.drawable.ic_settings,
+                                    R.string.setup_gpu_driver_select,
+                                    R.string.setup_gpu_driver_select_description,
+                                    {
+                                        binding.root.findNavController()
+                                            .navigate(R.id.driverManagerFragment)
+                                    }
+                                )
+                            )
+                        }
+                    ) { PageState.UNDEFINED }
+                )
+            }
             add(
                 SetupPage(
                     R.drawable.ic_check,
@@ -304,6 +336,7 @@ class SetupFragment : Fragment() {
 
             override fun onPageSelected(position: Int) {
                 super.onPageSelected(position)
+                currentPage = position
 
                 val isFirstPage = position == 0
                 val isLastPage = position == pages.size - 1
@@ -372,6 +405,7 @@ class SetupFragment : Fragment() {
             pageForward()
         }
         binding.buttonBack.setOnClickListener { pageBackward() }
+        binding.viewPager2.setCurrentItem(currentPage, false)
 
 
         if (savedInstanceState != null) {
@@ -385,7 +419,7 @@ class SetupFragment : Fragment() {
             if (backIsVisible) {
                 binding.buttonBack.visibility = View.VISIBLE
             }
-        } else {
+        } else if (!::hasBeenWarned.isInitialized || hasBeenWarned.size != pages.size) {
             hasBeenWarned = BooleanArray(pages.size)
         }
 
@@ -463,32 +497,6 @@ class SetupFragment : Fragment() {
                     }
                 }
             }
-        }
-
-    val getLosslessDll =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { result ->
-            if (result == null) {
-                return@registerForActivityResult
-            }
-
-            val resultStrings = resources.getStringArray(R.array.losslessDllResults)
-            ProgressDialogFragment.newInstance(
-                requireActivity(),
-                R.string.lossless_scaling_installing,
-                false
-            ) { _, _ ->
-                val installResult = LosslessScalingHelper.install(result)
-                if (installResult == LosslessScalingHelper.RESULT_OK) {
-                    getString(R.string.lossless_scaling_install_success)
-                } else {
-                    MessageDialogFragment.newInstance(
-                        titleId = R.string.lossless_scaling_install_failed,
-                        descriptionString = resultStrings[installResult]
-                    )
-                }
-            }.apply {
-                onDialogComplete = { checkForButtonState.invoke() }
-            }.show(parentFragmentManager, ProgressDialogFragment.TAG)
         }
 
     val getGamesDirectory =
