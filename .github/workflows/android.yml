@@ -1,0 +1,91 @@
+name: android
+
+on:
+  pull_request:
+    branches: [nx2]
+  push:
+    branches: [nx2, "android/**", "ccr-*"]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: android-arm64 apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2000M
+      CCACHE_COMPILERCHECK: content
+      # Gradle's .cxx folders are named by a config hash; relative paths keep cache hits stable.
+      CCACHE_BASEDIR: ${{ github.workspace }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # getGitVersion() names the build from git describe.
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # The runner image has the SDK; add the NDK, CMake and platform the Gradle build asks for,
+      # and glslangValidator for the host shaders.
+      - name: Install Android packages
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslang-tools ccache
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.31.5" > /dev/null
+
+      - name: Cache CPM downloads
+        uses: actions/cache@v5
+        with:
+          path: .cache/cpm
+          key: cpm-android-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          restore-keys: |
+            cpm-android-
+
+      - name: Cache compiler objects
+        uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: objects-android-arm64-${{ github.sha }}
+          restore-keys: |
+            objects-android-arm64-
+
+      - name: Build APK
+        shell: bash
+        working-directory: src/android
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon "-PYUZU_ANDROID_ARGS=-DUSE_CCACHE=ON" assembleMainlineRelease
+          apk=$(find app/build/outputs/apk/mainline/release -name '*.apk' | head -1)
+          cp "$apk" "$GITHUB_WORKSPACE/lichii-android-arm64.apk"
+          ccache --show-stats
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: lichii-android-arm64-${{ github.sha }}
+          path: lichii-android-arm64.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
