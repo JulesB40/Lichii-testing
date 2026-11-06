@@ -64,7 +64,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.eden.eden_emulator"
+        applicationId = providers.gradleProperty("appId").orNull ?: "dev.lichii.lichii"
         minSdk = 24
         targetSdk = 36
         versionName = getGitVersion()
@@ -182,7 +182,7 @@ android {
     }
 
     // appNameBase is used for the primary identifier
-    // this should be "Eden <flavorName>"
+    // this should be "Lichii <flavorName>"
     flavorDimensions.add("version")
     productFlavors {
         create("mainline") {
@@ -190,8 +190,8 @@ android {
             isDefault = true
             minSdk = 33
 
-            manifestPlaceholders += mapOf("appNameBase" to "Eden")
-            resValue("string", "app_name_suffixed", "Eden")
+            manifestPlaceholders += mapOf("appNameBase" to "Lichii")
+            resValue("string", "app_name_suffixed", "Lichii")
 
             ndk {
                 abiFilters += listOf("arm64-v8a")
@@ -265,12 +265,12 @@ android {
     }
 
     productFlavors.all {
-        val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Eden"
+        val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Lichii"
         val suffix = if (isNightly) " Nightly" else ""
 
         // apply nightly suffix I/A
         resValue("string", "app_name_suffixed", "$currentName$suffix")
-        resValue("string", "app_name", "Eden$suffix")
+        resValue("string", "app_name", "Lichii$suffix")
     }
 
     sourceSets {

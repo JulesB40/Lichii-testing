@@ -221,63 +221,41 @@
     <color name="yuzu_inversePrimary_gray">#BDBDBD</color>
     <color name="yuzu_surfaceTint_gray">#9E9E9E</color>
 
-    <!-- Eden Theme Colors -->
-
-    <!-- Synthwave/Vaporwave Primary Colors -->
-    <color name="eden_primary">#FF0080</color> <!-- Neon magenta -->
-    <color name="eden_primary_variant">#E6006B</color> <!-- Darker magenta -->
-    <color name="eden_secondary">#60D1F6</color> <!-- Electric cyan -->
-    <color name="eden_secondary_variant">#00E6E6</color> <!-- Darker cyan -->
-
-    <!-- Background Colors - White -->
-    <color name="eden_background">#FFFFFF</color> <!-- Pure black background -->
-    <color name="eden_surface">#FFFFFF</color> <!-- Card surface -->
-    <color name="eden_surface_variant">#D3D3D3</color> <!-- Elevated surface -->
-
-    <!-- Text Colors - High contrast for readability -->
-    <color name="eden_on_background">#000000</color> <!-- Pure black text -->
-    <color name="eden_on_surface">#000000</color> <!-- Pure black text -->
-    <color name="eden_on_primary">#FFFFFF</color> <!-- White on neon -->
-    <color name="eden_on_secondary">#C0C0C0</color> <!-- Milky White on cyan -->
-
-    <!-- Synthwave Accent Colors -->
-    <color name="eden_accent_purple">#9D00FF</color> <!-- Electric purple -->
-    <color name="eden_accent_blue">#0080FF</color> <!-- Electric blue -->
-    <color name="eden_accent_orange">#FF8000</color> <!-- Neon orange -->
-
-    <!-- Neon Glow Effects -->
-    <color name="eden_glow_pink">#80FF0080</color> <!-- Magenta glow -->
-    <color name="eden_glow_cyan">#8060D1F6</color> <!-- Cyan glow -->
-    <color name="eden_glow_orange">#80FF8000</color> <!-- Orange glow -->
-
-    <!-- Neon Border Colors -->
-    <color name="eden_border">#7c757f</color> <!-- Subtle border -->
-    <color name="eden_border_light">#948b98</color> <!-- Lighter border -->
-    <color name="eden_border_gradient_start">#FF0080</color> <!-- Neon magenta -->
-    <color name="eden_border_gradient_end">#60D1F6</color> <!-- Electric cyan -->
-
-    <!-- Synthwave Status Colors -->
-    <color name="eden_error">#FF0040</color> <!-- Neon red -->
-    <color name="eden_success">#00FF80</color> <!-- Neon green -->
-    <color name="eden_warning">#FFFF00</color> <!-- Neon yellow -->
-    <color name="eden_info">#0080FF</color> <!-- Electric blue -->
-
-    <!-- Overlay Colors -->
-    <color name="eden_overlay">#CCFFFFFF</color>
-
-    <!-- Neon Button Colors -->
-    <color name="eden_button_primary_bg">#FF0080</color> <!-- Neon magenta -->
-    <color name="eden_button_secondary_bg">#00000000</color> <!-- Transparent -->
-    <color name="eden_button_secondary_border">#60D1F6</color> <!-- Electric cyan -->
-
-    <!-- Synthwave Card Colors -->
-    <color name="eden_card_background">#F0F0F0</color> <!-- Almost white -->
-    <color name="eden_card_background_elevated">#D8D8D8</color> <!-- Elevated white -->
-
-    <!-- Transparent versions for gradients -->
+    <!-- Lichii theme colors (resource names kept from Eden) -->
+    <color name="eden_primary">#E0185E</color>
+    <color name="eden_primary_variant">#B0104A</color>
+    <color name="eden_secondary">#8CC152</color>
+    <color name="eden_secondary_variant">#B5DB8C</color>
+    <color name="eden_background">#FFF8F7</color>
+    <color name="eden_surface">#FFFFFF</color>
+    <color name="eden_surface_variant">#F6E3E8</color>
+    <color name="eden_on_background">#24131A</color>
+    <color name="eden_on_surface">#24131A</color>
+    <color name="eden_on_primary">#FFFFFF</color>
+    <color name="eden_on_secondary">#10200A</color>
+    <color name="eden_accent_purple">#B23A6A</color>
+    <color name="eden_accent_blue">#7A2650</color>
+    <color name="eden_accent_orange">#E8693A</color>
+    <color name="eden_glow_pink">#80E0185E</color>
+    <color name="eden_glow_cyan">#80FF8A5C</color>
+    <color name="eden_glow_orange">#80E0A100</color>
+    <color name="eden_border">#A08890</color>
+    <color name="eden_border_light">#C9B3BA</color>
+    <color name="eden_border_gradient_start">#E0185E</color>
+    <color name="eden_border_gradient_end">#FF8A5C</color>
+    <color name="eden_error">#C62828</color>
+    <color name="eden_success">#2E9E4F</color>
+    <color name="eden_warning">#E0A100</color>
+    <color name="eden_info">#2F6FD6</color>
+    <color name="eden_overlay">#CCFFF8F7</color>
+    <color name="eden_button_primary_bg">#E0185E</color>
+    <color name="eden_button_secondary_bg">#00000000</color>
+    <color name="eden_button_secondary_border">#FF8A5C</color>
+    <color name="eden_card_background">#FFF1F3</color>
+    <color name="eden_card_background_elevated">#FBE3E9</color>
     <color name="eden_transparent">#00000000</color>
-    <color name="eden_primary_transparent">#05FF0080</color>
-    <color name="eden_secondary_transparent">#0500FFFF</color>
+    <color name="eden_primary_transparent">#05E0185E</color>
+    <color name="eden_secondary_transparent">#05FF8A5C</color>
 
     <!-- Common Colors Across All Themes -->
     <color name="yuzu_outlineVariant">#C6C5D0</color>
