@@ -81,6 +81,17 @@ jobs:
           cp "$apk" "$GITHUB_WORKSPACE/lichii-android-arm64.apk"
           ccache --show-stats
 
+      # Gradle stops at the first native error; list every failing file so they can be fixed in one pass.
+      - name: List native build errors
+        if: failure()
+        shell: bash
+        working-directory: src/android/app
+        run: |
+          build_ninja=$(find .cxx -name build.ninja -path '*arm64-v8a*' | head -1)
+          [ -n "$build_ninja" ] || exit 0
+          "$ANDROID_HOME/cmake/3.31.5/bin/ninja" -C "$(dirname "$build_ninja")" -k 0 yuzu-android 2>&1 \
+            | grep -E -A3 "error:|FAILED:|undefined (reference|symbol)" | head -600 || true
+
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
