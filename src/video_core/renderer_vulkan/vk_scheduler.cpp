@@ -673,15 +673,21 @@ void Scheduler::ReportLossTrace() const {
                          std::chrono::duration<double, std::milli>(time - now).count(), event);
         }
     }
-    for (size_t i = 0; i < loss_submissions.size(); ++i) {
+    // Adreno's kernel retires a submission it resets after a hang (~2 s) as finished, so the
+    // last few finished ones are logged too.
+    static constexpr size_t LoggedSubmissions = 6;
+    for (size_t i = loss_submissions.size() - LoggedSubmissions; i < loss_submissions.size(); ++i) {
         const LossSubmission& submission =
             loss_submissions[(loss_next + i) % loss_submissions.size()];
-        if (submission.tick <= gpu_tick) {
+        if (submission.tick == 0) {
             continue;
         }
-        LOG_CRITICAL(Render_Vulkan, "Loss trace: unfinished tick {}: {} draws, {} dispatches, {} shaders",
-                     submission.tick, submission.draws, submission.dispatches,
-                     submission.shaders.size());
+        LOG_CRITICAL(Render_Vulkan,
+                     "Loss trace: {} tick {} submitted {:.1f} ms before: {} draws, {} dispatches, "
+                     "{} shaders",
+                     submission.tick <= gpu_tick ? "finished" : "unfinished", submission.tick,
+                     std::chrono::duration<double, std::milli>(now - submission.submitted).count(),
+                     submission.draws, submission.dispatches, submission.shaders.size());
         // Stage 6 is compute; uses count draws or dispatches.
         std::string line;
         for (size_t s = 0; s < submission.shaders.size(); ++s) {
@@ -884,6 +890,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
         if (loss_trace) {
             std::scoped_lock lock{loss_mutex};
             loss_current.tick = signal_value;
+            loss_current.submitted = std::chrono::steady_clock::now();
             loss_submissions[loss_next++ % loss_submissions.size()] = std::move(loss_current);
             loss_current = {};
         }

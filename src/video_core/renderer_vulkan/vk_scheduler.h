@@ -500,7 +500,7 @@ private:
     bool trace_gpu_failed{};
 
     /// EDEN_NX2_LOSS_TRACE=1: the shaders of the last submissions, in first-use order. On device
-    /// loss, the ones past the last tick the GPU finished are logged.
+    /// loss, the last ones are logged: a hang the kernel resets retires its submission as finished.
     struct LossSubmission {
         struct ShaderUse {
             u64 hash{};
@@ -508,6 +508,7 @@ private:
             u32 uses{};
         };
         u64 tick{};
+        std::chrono::steady_clock::time_point submitted{};
         u32 draws{};
         u32 dispatches{};
         std::vector<ShaderUse> shaders;
