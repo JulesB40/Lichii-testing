@@ -491,6 +491,27 @@ private:
     bool trace_gpu_pending{};
     bool trace_gpu_failed{};
 
+    /// EDEN_NX2_LOSS_TRACE=1: the shaders of the last submissions, in first-use order. On device
+    /// loss, the ones past the last tick the GPU finished are logged.
+    struct LossSubmission {
+        struct ShaderUse {
+            u64 hash{};
+            u32 stage{};
+            u32 uses{};
+        };
+        u64 tick{};
+        u32 draws{};
+        u32 dispatches{};
+        std::vector<ShaderUse> shaders;
+    };
+    void NoteLossShader(u64 hash, u32 stage);
+    void ReportLossTrace() const;
+    bool loss_trace{};
+    LossSubmission loss_current;
+    std::array<LossSubmission, 16> loss_submissions;
+    size_t loss_next{};
+    mutable std::mutex loss_mutex;
+
     VideoCommon::QueryCacheBase<QueryCacheParams>* query_cache = nullptr;
 
     vk::CommandBuffer current_cmdbuf;

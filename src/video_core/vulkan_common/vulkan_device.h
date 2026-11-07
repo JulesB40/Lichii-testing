@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstdlib>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -256,6 +257,11 @@ public:
 
     /// Logs what VK_EXT_device_fault reports about a device loss.
     void ReportDeviceFault() const;
+
+    /// Sets what ReportLoss also logs (EDEN_NX2_LOSS_TRACE); empty to clear.
+    void SetLossReporter(std::function<void()> reporter) const {
+        loss_reporter = std::move(reporter);
+    }
 
     /// Reports a shader to Nsight Aftermath.
     void SaveShader(std::span<const u32> spirv) const;
@@ -1316,6 +1322,7 @@ private:
 
     VkPhysicalDeviceFeatures2 features2{};
     VkPhysicalDeviceFaultFeaturesEXT device_fault_features{};
+    mutable std::function<void()> loss_reporter;
     VkPhysicalDeviceProperties2 properties2{};
 
     // Misc features

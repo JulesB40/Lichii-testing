@@ -147,12 +147,21 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
         }
     }
 
+    if (const char* value = std::getenv("EDEN_NX2_LOSS_TRACE"); value && value[0] == '1') {
+        loss_trace = true;
+        device.SetLossReporter([this] { ReportLossTrace(); });
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_LOSS_TRACE: device loss logs the unfinished submissions");
+    }
+
     AcquireNewChunk();
     AllocateWorkerCommandBuffer();
     worker_thread = std::jthread([this](std::stop_token token) { WorkerThread(token); });
 }
 
 Scheduler::~Scheduler() {
+    if (loss_trace) {
+        device.SetLossReporter({});
+    }
     if (trace_query_pool) {
         WaitWorker();
         worker_thread.request_stop();
@@ -594,10 +603,16 @@ void Scheduler::TraceShader(u64 hash, u32 stage) {
 }
 
 void Scheduler::TraceGraphicsPipeline(const std::array<u64, 6>& hashes) {
-    if (!trace_query_pool) {
+    if (!trace_query_pool && !loss_trace) {
         return;
     }
     Record([this, hashes](vk::CommandBuffer) {
+        if (loss_trace) {
+            ++loss_current.draws;
+            for (u32 stage = 0; stage < hashes.size(); ++stage) {
+                NoteLossShader(hashes[stage], stage);
+            }
+        }
         if (!trace_gpu_recording) {
             return;
         }
@@ -609,16 +624,60 @@ void Scheduler::TraceGraphicsPipeline(const std::array<u64, 6>& hashes) {
 }
 
 void Scheduler::TraceComputePipeline(u64 hash) {
-    if (!trace_query_pool) {
+    if (!trace_query_pool && !loss_trace) {
         return;
     }
     Record([this, hash](vk::CommandBuffer) {
+        if (loss_trace) {
+            ++loss_current.dispatches;
+            NoteLossShader(hash, 6);
+        }
         if (!trace_gpu_recording) {
             return;
         }
         ++trace_work.dispatch_attempts;
         TraceShader(hash, 6);
     });
+}
+
+void Scheduler::NoteLossShader(u64 hash, u32 stage) {
+    if (hash == 0) {
+        return;
+    }
+    for (auto& use : loss_current.shaders) {
+        if (use.hash == hash && use.stage == stage) {
+            ++use.uses;
+            return;
+        }
+    }
+    loss_current.shaders.push_back({hash, stage, 1});
+}
+
+void Scheduler::ReportLossTrace() const {
+    const u64 gpu_tick = master_semaphore->KnownGpuTick();
+    std::scoped_lock lock{loss_mutex};
+    LOG_CRITICAL(Render_Vulkan, "Loss trace: GPU finished tick {}, next tick {}", gpu_tick,
+                 master_semaphore->CurrentTick());
+    for (size_t i = 0; i < loss_submissions.size(); ++i) {
+        const LossSubmission& submission =
+            loss_submissions[(loss_next + i) % loss_submissions.size()];
+        if (submission.tick <= gpu_tick) {
+            continue;
+        }
+        LOG_CRITICAL(Render_Vulkan, "Loss trace: unfinished tick {}: {} draws, {} dispatches, {} shaders",
+                     submission.tick, submission.draws, submission.dispatches,
+                     submission.shaders.size());
+        // Stage 6 is compute; uses count draws or dispatches.
+        std::string line;
+        for (size_t s = 0; s < submission.shaders.size(); ++s) {
+            const auto& use = submission.shaders[s];
+            line += fmt::format(" s{}:{:016x}x{}", use.stage, use.hash, use.uses);
+            if (s % 12 == 11 || s + 1 == submission.shaders.size()) {
+                LOG_CRITICAL(Render_Vulkan, "Loss trace: tick {}:{}", submission.tick, line);
+                line.clear();
+            }
+        }
+    }
 }
 
 void Scheduler::ReportWorkTimes() {
@@ -806,6 +865,12 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
         }
         if (trace_query_pool) {
             trace_work = {};
+        }
+        if (loss_trace) {
+            std::scoped_lock lock{loss_mutex};
+            loss_current.tick = signal_value;
+            loss_submissions[loss_next++ % loss_submissions.size()] = std::move(loss_current);
+            loss_current = {};
         }
         cmdbuf.End();
 
