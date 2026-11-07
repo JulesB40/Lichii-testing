@@ -81,6 +81,8 @@ jobs:
           ./gradlew --no-daemon "-PYUZU_ANDROID_ARGS=-DUSE_CCACHE=ON" assembleMainlineRelease
           apk=$(find app/build/outputs/apk/mainline/release -name '*.apk' | head -1)
           cp "$apk" "$GITHUB_WORKSPACE/lichii-android-arm64.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$GITHUB_WORKSPACE/lichii-android-arm64.apk" \
+            | grep -E "^(package|sdkVersion|targetSdkVersion|application-label|application-icon-640|native-code):"
           ccache --show-stats
 
       # Gradle stops at the first native error; list every failing file so they can be fixed in one pass.
