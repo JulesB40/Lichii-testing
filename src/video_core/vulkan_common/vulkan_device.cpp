@@ -550,7 +550,19 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                                VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
         features.shader_atomic_int64.shaderBufferInt64Atomics = false;
         features.shader_atomic_int64.shaderSharedInt64Atomics = false;
+#ifdef __ANDROID__
+        // Switch 2 shaders reach much of their data through 64-bit global addresses, and without
+        // shaderInt64 those loads read as zero: Ocarina of Time's first in-engine scene logged
+        // hundreds of ignored 128-bit loads on an Adreno 750, then lost the device. Current Adreno
+        // drivers take 64-bit integer code; EDEN_NX2_QCOM_INT64=0 turns it off as before.
+        if (const char* value = std::getenv("EDEN_NX2_QCOM_INT64"); value && value[0] == '0') {
+            features.features.shaderInt64 = false;
+        } else {
+            LOG_INFO(Render_Vulkan, "Qualcomm driver: 64-bit shader integers kept on");
+        }
+#else
         features.features.shaderInt64 = false;
+#endif
         LOG_WARNING(Render_Vulkan, "Qualcomm drivers have broken workgroup memory explicit layout.");
         RemoveExtensionFeature(extensions.workgroup_memory_explicit_layout,
                                features.workgroup_memory_explicit_layout,
