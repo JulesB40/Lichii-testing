@@ -552,6 +552,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
     if (!launch_description.block_dim_x || !launch_description.block_dim_y || !launch_description.block_dim_z)
         return false;
     dlss_chain.output_pass = false;
+    current_native_key = 0; // ProcessGameDlss sets it once the program is lowered
     // Fortune's Weave's evaluation is 13 dispatches. Bound incomplete evaluations, including
     // skipped dispatches, so a missing output pass cannot keep the chain active indefinitely.
     constexpr u32 max_dispatches = 64;
@@ -590,10 +591,12 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
         dispatched = false;
         if (dlss_chain.active) {
             ++dlss_chain.rejected;
-        } else if (std::string_view{error.what()}.find("matrix multiply") !=
-                   std::string_view::npos) {
-            DescribeNativeResources(qmd);
-            LOG_ERROR(HW_GPU, "Native tensor dispatch is unsupported; no validated replacement was available");
+        } else if (const std::string_view reason{error.what()};
+                   reason.find("matrix multiply") != std::string_view::npos ||
+                   reason.find("HMMA") != std::string_view::npos) {
+            if (DescribeNativeResources(qmd)) {
+                LOG_ERROR(HW_GPU, "Native tensor dispatch is unsupported; no validated replacement was available");
+            }
         }
     }
     if (dlss_chain.output_pass) {
@@ -616,6 +619,7 @@ constexpr u32 DLSS_CHECK_MISMATCH_PERCENT = 3;
 
 bool KeplerCompute::ProcessGameDlss(u64 program_id, u64 native_key) {
     using namespace VideoCommon::FireEmblemUpscale;
+    current_native_key = native_key;
     const auto passes = CapturedPasses(program_id);
     if (!passes) {
         return false;
@@ -857,28 +861,37 @@ bool KeplerCompute::FinishDlssEvaluation() {
     return TryFireEmblemUpscale();
 }
 
-// Logs the images a rejected program's handles (constant bank 0, bytes 0x80-0x11c) point to, so a
-// substitute (e.g. an upscale blit for a tensor-core pass) can find its inputs and output.
-void KeplerCompute::DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd) {
-    static u32 described{};
-    if (described++ >= 2) return;
+// Logs the images a rejected program's handles in constant bank 0 point to, so a substitute (e.g.
+// an upscale for a tensor-core network) can find its inputs and output: each rejected program once,
+// up to 16, since a network is a chain of them. Fire Emblem's DLSS passes keep theirs past 0x270.
+bool KeplerCompute::DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd) {
+    static std::unordered_set<GPUVAddr> described;
+    const GPUVAddr program = regs.code_loc.Address() + launch_description.program_start;
+    if (described.size() >= 16 || !described.insert(program).second) return false;
     const auto& cbuf = launch_description.const_buffer_config[0];
     const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
-    LOG_INFO(HW_GPU, "Native resources: cbuf0 {:#x} size {:#x}, grid {}x{}x{}, block {}x{}x{}, tic pool {:#x}",
-             cbuf_address, cbuf.size.Value(), qmd[12], qmd[13] & 0xffff, qmd[14] & 0xffff,
-             launch_description.block_dim_x.Value(), launch_description.block_dim_y.Value(),
-             launch_description.block_dim_z.Value(), regs.tic.Address());
-    for (u32 offset = 0x80; offset < 0x120; offset += 4) {
+    LOG_INFO(HW_GPU, "Native resources of program {:#x} (native key {:#018x}): cbuf0 {:#x} size "
+             "{:#x}, grid {}x{}x{}, block {}x{}x{}, tic pool {:#x}",
+             program, current_native_key, cbuf_address, cbuf.size.Value(), qmd[12],
+             qmd[13] & 0xffff, qmd[14] & 0xffff, launch_description.block_dim_x.Value(),
+             launch_description.block_dim_y.Value(), launch_description.block_dim_z.Value(),
+             regs.tic.Address());
+    const u32 end = std::min<u32>(cbuf.size.Value(), 0x400);
+    if (!memory_manager.IsFullyMappedRange(cbuf_address, end)) return true;
+    for (u32 offset = 0x80; offset + 4 <= end; offset += 4) {
         const u32 handle = memory_manager.Read<u32>(cbuf_address + offset);
         const u32 tic_index = handle & 0xfffff;
         if (handle == 0 || tic_index > regs.tic.limit) continue;
         const auto tic = GetTICEntry(tic_index);
+        // Other constants also read as small indices; images are the mapped ones of some size.
+        if (tic.Address() == 0 || tic.Width() < 64 || tic.Height() < 64) continue;
         LOG_INFO(HW_GPU, "  handle @{:#x} = {:#x}: tic {} address {:#x} {}x{} format {:#x} types {}/{}/{}/{}",
                  offset, handle, tic_index, tic.Address(), tic.Width(), tic.Height(),
                  static_cast<u32>(tic.format.Value()), static_cast<u32>(tic.r_type.Value()),
                  static_cast<u32>(tic.g_type.Value()), static_cast<u32>(tic.b_type.Value()),
                  static_cast<u32>(tic.a_type.Value()));
     }
+    return true;
 }
 
 std::atomic<u32> g_nx2_trace_draws_after_upscale{};

@@ -277,7 +277,7 @@ private:
 
     bool DispatchNativeCompute(const NativeQmdScheduler::Descriptor& descriptor);
     void ProcessNativeReportSemaphore(u32 argument);
-    void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
+    bool DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     void RememberDlssMotionVectors();
     bool TryFireEmblemUpscale(bool allow_history = true);
     void CaptureFireEmblemJitter();
@@ -313,6 +313,8 @@ private:
         /// What the Graphics tab was last told.
         VideoCore::GameDlssStatus status{};
     } dlss_chain;
+    /// Native program key of the compute program being dispatched, for DescribeNativeResources.
+    u64 current_native_key{};
 
     /// Motion vectors and depth of Fire Emblem: Fortune's Weave's DLSS evaluation, from its first
     /// pass (run earlier in the frame than the network pass the stand-in replaces), with the input
