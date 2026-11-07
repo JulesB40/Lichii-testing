@@ -277,16 +277,16 @@ private:
             AMediaFormat_getInt32(format, "crop-top", &top) &&
             AMediaFormat_getInt32(format, "crop-right", &right) &&
             AMediaFormat_getInt32(format, "crop-bottom", &bottom)) {
-            crop_x = left;
-            crop_y = top;
+            crop_x = static_cast<u32>(std::max(left, 0));
+            crop_y = static_cast<u32>(std::max(top, 0));
             frame_width = right - left + 1;
             frame_height = bottom - top + 1;
         }
         AMediaFormat_delete(format);
         width = static_cast<u32>(std::max(frame_width, 0));
         height = static_cast<u32>(std::max(frame_height, 0));
-        stride = std::max(stride, frame_width + crop_x);
-        slice_height = std::max(slice_height, frame_height + crop_y);
+        stride = std::max(stride, frame_width + static_cast<s32>(crop_x));
+        slice_height = std::max(slice_height, frame_height + static_cast<s32>(crop_y));
         unsupported = color_format != ColorYuv420Planar && color_format != ColorYuv420SemiPlanar &&
                       color_format != ColorQcomYuv420SemiPlanar32m && color_format != ColorYuvP010;
         LOG_INFO(HW_GPU, "nx2 video: hardware AV1 output {}x{} stride {} slice height {} crop {},{} "
