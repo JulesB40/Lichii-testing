@@ -42,8 +42,10 @@ extern "C" {
 
 #include "common/android/multiplayer/multiplayer.h"
 #include "common/android/android_common.h"
+#include "common/android/crash_log.h"
 #include "common/android/id_cache.h"
 #include "common/dynamic_library.h"
+#include "common/fs/fs_paths.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -259,6 +261,9 @@ void EmulationSession::InitializeSystem(bool reload) {
         Common::Log::Initialize();
         Common::Log::SetColorConsoleBackendEnabled(true);
         Common::Log::Start();
+        // Before NCE installs its handlers, which pass host faults on to this one.
+        Common::Android::InstallCrashLog(Common::FS::PathToUTF8String(
+            Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / LOG_FILE));
 
         m_input_subsystem.Initialize();
     }

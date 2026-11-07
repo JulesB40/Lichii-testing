@@ -178,6 +178,8 @@ if(ANDROID)
         fs/fs_android.h
         android/android_common.cpp
         android/android_common.h
+        android/crash_log.cpp
+        android/crash_log.h
         android/id_cache.cpp
         android/id_cache.h
         android/multiplayer/multiplayer.cpp
