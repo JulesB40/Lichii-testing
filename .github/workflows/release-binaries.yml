@@ -620,12 +620,17 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  android:
+    name: android
+    needs: prepare-release
+    uses: ./.github/workflows/android.yml
+
   # Publishes every binary as a GitHub pre-release once every platform built: on pushes to
   # nx2-experimental, and on manual runs unless "Publish the binaries as a GitHub release" is
   # unticked.
   release:
     name: Publish release
-    needs: build
+    needs: [build, android]
     if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-24.04
     permissions:
@@ -652,6 +657,8 @@ jobs:
               for file in "$artifact"*.AppImage "$artifact"*.tar.gz; do
                 cp "$file" "dist/$(strip_sha "$(basename "$file")")"
               done
+            elif compgen -G "$artifact*.apk" > /dev/null; then
+              cp "$artifact"*.apk dist/
             elif compgen -G "$artifact*.zip" > /dev/null; then
               for file in "$artifact"*.zip "$artifact"*.dmg; do
                 [[ -e "$file" ]] && cp "$file" "dist/$(strip_sha "$(basename "$file")")"
@@ -704,6 +711,12 @@ jobs:
           | arm64 (Apple Silicon) | [zip](${base}/lichii-macos-arm64.zip) | | macOS 15 or newer. Not notarized: right-click and choose Open the first time, or run \`xattr -dr com.apple.quarantine lichii.app\`. \`eden-cli\` is inside the app, in \`Contents/MacOS\` |
 
           The PGO builds are the same programs compiled with profile-guided optimization (clang plus Eglantine's profile); prefer them when your CPU supports it.
+
+          ## Android
+
+          | Build Type | APK | Notes |
+          | --- | --- | --- |
+          | arm64 | [APK](${base}/lichii-android-arm64.apk) | Android 13 or newer, tuned for Snapdragon. Installs beside Eden; setup walks through keys, firmware, games and an optional Turnip driver |
           EOF
 
           gh release create "${tag}" dist/* \
