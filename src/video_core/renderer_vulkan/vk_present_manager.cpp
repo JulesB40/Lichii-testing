@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <bit>
+
+#include <fmt/format.h>
+
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/frontend/emu_window.h"
@@ -393,6 +397,10 @@ void PresentManager::DiscardFrame(Frame* frame) {
     };
 
     std::scoped_lock submit_lock{scheduler.submit_mutex};
+    if (scheduler.LossTraceEnabled()) {
+        scheduler.NoteLossQueue(fmt::format("discard frame {} wait {:#x}", fmt::ptr(frame),
+                                            std::bit_cast<u64>(render_ready)));
+    }
     void(device.GetGraphicsQueue().Submit(submit_info, *frame->present_done));
 }
 
@@ -574,8 +582,20 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     // Submit the image copy/blit to the swapchain
     {
         std::scoped_lock submit_lock{scheduler.submit_mutex};
-        switch (const VkResult result =
-                    device.GetGraphicsQueue().Submit(submit_info, *frame->present_done)) {
+        if (scheduler.LossTraceEnabled()) {
+            scheduler.NoteLossQueue(fmt::format(
+                "present copy frame {} {}x{} wait {:#x} {:#x} signal {:#x}", fmt::ptr(frame),
+                frame->width, frame->height, std::bit_cast<u64>(present_semaphore),
+                std::bit_cast<u64>(*frame->render_ready),
+                std::bit_cast<u64>(render_semaphore)));
+        }
+        const VkResult submit_result =
+            device.GetGraphicsQueue().Submit(submit_info, *frame->present_done);
+        if (scheduler.LossTraceEnabled()) {
+            scheduler.NoteLossQueue(
+                fmt::format("present copy submitted: {}", static_cast<int>(submit_result)));
+        }
+        switch (const VkResult result = submit_result) {
         case VK_SUCCESS:
             break;
         case VK_ERROR_DEVICE_LOST:
@@ -589,6 +609,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
 
     // Present
     swapchain.Present(render_semaphore);
+    if (scheduler.LossTraceEnabled()) {
+        scheduler.NoteLossQueue("queue present returned");
+    }
 }
 
 } // namespace Vulkan

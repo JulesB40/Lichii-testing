@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <memory>
 #include <algorithm>
+#include <bit>
 #include <vector>
 #include <string_view>
 #include <string>
@@ -653,11 +654,25 @@ void Scheduler::NoteLossShader(u64 hash, u32 stage) {
     loss_current.shaders.push_back({hash, stage, 1});
 }
 
+void Scheduler::NoteLossQueue(std::string event) {
+    std::scoped_lock lock{loss_mutex};
+    loss_queue[loss_queue_next++ % loss_queue.size()] = {std::chrono::steady_clock::now(),
+                                                          std::move(event)};
+}
+
 void Scheduler::ReportLossTrace() const {
     const u64 gpu_tick = master_semaphore->KnownGpuTick();
+    const auto now = std::chrono::steady_clock::now();
     std::scoped_lock lock{loss_mutex};
     LOG_CRITICAL(Render_Vulkan, "Loss trace: GPU finished tick {}, next tick {}", gpu_tick,
                  master_semaphore->CurrentTick());
+    for (size_t i = 0; i < loss_queue.size(); ++i) {
+        const auto& [time, event] = loss_queue[(loss_queue_next + i) % loss_queue.size()];
+        if (!event.empty()) {
+            LOG_CRITICAL(Render_Vulkan, "Loss trace: queue {:.1f} ms: {}",
+                         std::chrono::duration<double, std::milli>(time - now).count(), event);
+        }
+    }
     for (size_t i = 0; i < loss_submissions.size(); ++i) {
         const LossSubmission& submission =
             loss_submissions[(loss_next + i) % loss_submissions.size()];
@@ -879,8 +894,18 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
         }
 
         std::scoped_lock lock{submit_mutex};
-        switch (const VkResult result = master_semaphore->SubmitQueue(
-                    cmdbuf, upload_cmdbuf, signal_semaphore, wait_semaphore, signal_value)) {
+        if (loss_trace) {
+            NoteLossQueue(fmt::format("submit tick {} signal {:#x} wait {:#x}", signal_value,
+                                      std::bit_cast<u64>(signal_semaphore),
+                                      std::bit_cast<u64>(wait_semaphore)));
+        }
+        const VkResult submit_result = master_semaphore->SubmitQueue(
+            cmdbuf, upload_cmdbuf, signal_semaphore, wait_semaphore, signal_value);
+        if (loss_trace) {
+            NoteLossQueue(fmt::format("submitted tick {}: {}", signal_value,
+                                      static_cast<int>(submit_result)));
+        }
+        switch (const VkResult result = submit_result) {
         case VK_SUCCESS:
             // Log successful queue submission
             if (GPU::Logging::IsActive() &&

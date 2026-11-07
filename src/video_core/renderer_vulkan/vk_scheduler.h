@@ -16,6 +16,7 @@
 #include <utility>
 #include <queue>
 #include <source_location>
+#include <string>
 #include <vector>
 
 #include "common/alignment.h"
@@ -310,6 +311,13 @@ public:
 
     std::mutex submit_mutex;
 
+    /// EDEN_NX2_LOSS_TRACE: whether queue operations should be noted with NoteLossQueue.
+    [[nodiscard]] bool LossTraceEnabled() const noexcept {
+        return loss_trace;
+    }
+    /// Notes a queue operation (submit, present) for the loss trace, in queue order.
+    void NoteLossQueue(std::string event);
+
 private:
     std::chrono::steady_clock::time_point last_flush{};
     bool flush_pending{};
@@ -510,6 +518,8 @@ private:
     LossSubmission loss_current;
     std::array<LossSubmission, 16> loss_submissions;
     size_t loss_next{};
+    std::array<std::pair<std::chrono::steady_clock::time_point, std::string>, 48> loss_queue;
+    size_t loss_queue_next{};
     mutable std::mutex loss_mutex;
 
     VideoCommon::QueryCacheBase<QueryCacheParams>* query_cache = nullptr;
