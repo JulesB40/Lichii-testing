@@ -280,6 +280,7 @@ private:
     bool DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     void RememberDlssMotionVectors();
     bool TryFireEmblemUpscale(bool allow_history = true);
+    bool TryOcarinaUpscale();
     void CaptureFireEmblemJitter();
     bool FinishDlssEvaluation();
     void CheckDlssNetwork();
@@ -313,8 +314,10 @@ private:
         /// What the Graphics tab was last told.
         VideoCore::GameDlssStatus status{};
     } dlss_chain;
-    /// Native program key of the compute program being dispatched, for DescribeNativeResources.
+    /// The compute program being dispatched (native key) and the game it belongs to, for
+    /// DescribeNativeResources and replacements of rejected programs.
     u64 current_native_key{};
+    u64 current_program_id{};
 
     /// Motion vectors and depth of Fire Emblem: Fortune's Weave's DLSS evaluation, from its first
     /// pass (run earlier in the frame than the network pass the stand-in replaces), with the input

@@ -23,6 +23,7 @@
 #include "core/core.h"
 #include "video_core/gpu_split.h"
 #include "video_core/fire_emblem_upscale.h"
+#include "video_core/ocarina_upscale.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2.h"
 #include "video_core/engines/fermi_2d.h"
@@ -589,6 +590,9 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
             LOG_ERROR(HW_GPU, "Native compute shader rejected: {}", error.what());
         }
         dispatched = false;
+        if (TryOcarinaUpscale()) {
+            return true;
+        }
         if (dlss_chain.active) {
             ++dlss_chain.rejected;
         } else if (const std::string_view reason{error.what()};
@@ -620,6 +624,7 @@ constexpr u32 DLSS_CHECK_MISMATCH_PERCENT = 3;
 bool KeplerCompute::ProcessGameDlss(u64 program_id, u64 native_key) {
     using namespace VideoCommon::FireEmblemUpscale;
     current_native_key = native_key;
+    current_program_id = program_id;
     const auto passes = CapturedPasses(program_id);
     if (!passes) {
         return false;
@@ -1086,6 +1091,85 @@ bool KeplerCompute::TryFireEmblemUpscale(bool allow_history) {
                  game, done ? "applied" : "unavailable; retaining native dispatch", use_history,
                  input->Address(), input->Width(), input->Height(), output->Address(),
                  output->Width(), output->Height(), jitter->offset[0], jitter->offset[1]);
+    }
+    return done;
+}
+
+// Ocarina of Time's network output pass, rejected: draw a bilinear upscale of its scene into its
+// output instead (see ocarina_upscale.h). EDEN_NX2_OOT_UPSCALE_INPUT=a0 takes its other 1920x1080
+// input.
+bool KeplerCompute::TryOcarinaUpscale() {
+    using namespace VideoCommon::OcarinaUpscale;
+    if (current_program_id != ProgramId || current_native_key != OutputProgramKey) {
+        return false;
+    }
+    static const u32 input_offset = [] {
+        const char* const value = std::getenv("EDEN_NX2_OOT_UPSCALE_INPUT");
+        return value != nullptr && std::string_view{value} == "a0" ? FeedbackColorOffset
+                                                                   : SceneColorOffset;
+    }();
+    const auto& cbuf = launch_description.const_buffer_config[0];
+    const GPUVAddr address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+    if (!(launch_description.const_buffer_enable_mask & 1) || cbuf.size.Value() < ConstantsSize ||
+        !memory_manager.IsFullyMappedRange(address, ConstantsSize)) {
+        return false;
+    }
+    const auto image = [&](u32 offset) -> std::optional<Texture::TICEntry> {
+        const u32 index = memory_manager.Read<u32>(address + offset) & 0xfffff;
+        if (index > regs.tic.limit || !memory_manager.IsFullyMappedRange(
+                regs.tic.Address() + u64{index} * sizeof(Texture::TICEntry), sizeof(Texture::TICEntry))) {
+            return std::nullopt;
+        }
+        return GetTICEntry(index);
+    };
+    const auto input = image(input_offset);
+    const auto output = image(OutputOffset);
+    static u32 logged{};
+    if (!input || !output || !ValidPair(*input, *output)) {
+        if (logged++ < 4) {
+            LOG_WARNING(HW_GPU, "Ocarina upscale: unexpected images at cbuf0+{:#x} and +{:#x}",
+                        input_offset, OutputOffset);
+        }
+        return false;
+    }
+    const auto surface = [](const Texture::TICEntry& tic) {
+        Fermi2D::Surface result{};
+        if (tic.format == Texture::TextureFormat::A2B10G10R10) {
+            result.format = Tegra::RenderTargetFormat::A2B10G10R10_UNORM;
+        } else {
+            result.format = tic.srgb_conversion ? Tegra::RenderTargetFormat::A8B8G8R8_SRGB
+                                                : Tegra::RenderTargetFormat::A8B8G8R8_UNORM;
+        }
+        result.linear = Fermi2D::MemoryLayout::BlockLinear;
+        result.block_width.Assign(tic.block_width);
+        result.block_height.Assign(tic.block_height);
+        result.block_depth.Assign(tic.block_depth);
+        result.depth = 1;
+        result.width = tic.Width();
+        result.height = tic.Height();
+        result.addr_upper = static_cast<u32>(tic.Address() >> 32);
+        result.addr_lower = static_cast<u32>(tic.Address());
+        return result;
+    };
+    const Fermi2D::Config config{
+        .operation = Fermi2D::Operation::SrcCopy,
+        .filter = Fermi2D::Filter::Bilinear,
+        .must_accelerate = true,
+        .dst_x0 = 0,
+        .dst_y0 = 0,
+        .dst_x1 = static_cast<s32>(output->Width()),
+        .dst_y1 = static_cast<s32>(output->Height()),
+        .src_x0 = 0,
+        .src_y0 = 0,
+        .src_x1 = static_cast<s32>(input->Width()),
+        .src_y1 = static_cast<s32>(input->Height()),
+    };
+    const bool done = rasterizer->AccelerateSurfaceCopy(surface(*input), surface(*output), config);
+    if (logged++ < 4) {
+        LOG_INFO(HW_GPU, "Ocarina upscale: {} cbuf0+{:#x} {:#x} {}x{} format {:#x} -> {:#x} {}x{}",
+                 done ? "applied" : "unavailable", input_offset, input->Address(), input->Width(),
+                 input->Height(), static_cast<u32>(input->format.Value()), output->Address(),
+                 output->Width(), output->Height());
     }
     return done;
 }
