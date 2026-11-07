@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <utility>
 
 #ifdef EDEN_NX2_LIBGAV1
 #include <cstdlib>
@@ -260,6 +261,14 @@ private:
         }
     }
 
+    /// Where a plane's samples are in the codec's buffer: sample (x, y) is at
+    /// offset + y * row_inc + x * col_inc, in bytes.
+    struct Plane {
+        size_t offset{};
+        s32 col_inc{};
+        s32 row_inc{};
+    };
+
     void ReadFormat() {
         AMediaFormat* format = AMediaCodec_getOutputFormat(codec);
         if (format == nullptr) {
@@ -268,9 +277,11 @@ private:
         s32 value{};
         s32 frame_width = AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_WIDTH, &value) ? value : 0;
         s32 frame_height = AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_HEIGHT, &value) ? value : 0;
-        stride = AMediaFormat_getInt32(format, "stride", &value) ? value : frame_width;
-        slice_height = AMediaFormat_getInt32(format, "slice-height", &value) ? value : frame_height;
-        color_format = AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, &value) ? value : 0;
+        s32 stride = AMediaFormat_getInt32(format, "stride", &value) ? value : frame_width;
+        s32 slice_height =
+            AMediaFormat_getInt32(format, "slice-height", &value) ? value : frame_height;
+        const s32 color_format =
+            AMediaFormat_getInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, &value) ? value : 0;
         full_range = AMediaFormat_getInt32(format, "color-range", &value) && value == 1;
         s32 left{}, top{}, right{}, bottom{};
         if (AMediaFormat_getInt32(format, "crop-left", &left) &&
@@ -282,61 +293,143 @@ private:
             frame_width = right - left + 1;
             frame_height = bottom - top + 1;
         }
-        AMediaFormat_delete(format);
         width = static_cast<u32>(std::max(frame_width, 0));
         height = static_cast<u32>(std::max(frame_height, 0));
         stride = std::max(stride, frame_width + static_cast<s32>(crop_x));
         slice_height = std::max(slice_height, frame_height + static_cast<s32>(crop_y));
-        unsupported = color_format != ColorYuv420Planar && color_format != ColorYuv420SemiPlanar &&
-                      color_format != ColorQcomYuv420SemiPlanar32m && color_format != ColorYuvP010;
+
+        // Flexible YUV (Codec2's choice) describes its planes in "image-data" (MediaImage2);
+        // without it, Qualcomm's decoders lay flexible YUV out as NV12.
+        const auto luma = static_cast<size_t>(stride) * static_cast<size_t>(slice_height);
+        ten_bit = color_format == ColorYuvP010;
+        const s32 sample = ten_bit ? 2 : 1;
+        planes = {Plane{0, sample, stride}, Plane{luma, 2 * sample, stride},
+                  Plane{luma + static_cast<size_t>(sample), 2 * sample, stride}};
+        if (color_format == ColorYuv420Planar) {
+            const size_t chroma = static_cast<size_t>(stride / 2) *
+                                  static_cast<size_t>((slice_height + 1) / 2);
+            planes[1] = {luma, 1, stride / 2};
+            planes[2] = {luma + chroma, 1, stride / 2};
+        }
+        const bool known = color_format == ColorYuv420Planar ||
+                           color_format == ColorYuv420SemiPlanar || color_format == ColorYuvP010 ||
+                           color_format == ColorYuv420Flexible ||
+                           color_format == ColorQcomYuv420SemiPlanar32m;
+        bool described = false;
+        void* data{};
+        size_t size{};
+        if (AMediaFormat_getBuffer(format, "image-data", &data, &size)) {
+            described = ReadImageData(static_cast<const u8*>(data), size);
+        }
+        AMediaFormat_delete(format);
+        unsupported = !described && !known;
         LOG_INFO(HW_GPU, "nx2 video: hardware AV1 output {}x{} stride {} slice height {} crop {},{} "
-                 "color format {:#x}{}", width, height, stride, slice_height, crop_x, crop_y,
-                 color_format, unsupported ? " (unsupported)" : "");
+                 "color format {:#x}{}: planes at {}/{}/{}, columns {}/{}/{}, rows {}/{}/{}{}",
+                 width, height, stride, slice_height, crop_x, crop_y, color_format,
+                 described ? " (image-data)" : "", planes[0].offset, planes[1].offset,
+                 planes[2].offset, planes[0].col_inc, planes[1].col_inc, planes[2].col_inc,
+                 planes[0].row_inc, planes[1].row_inc, planes[2].row_inc,
+                 unsupported ? " (unsupported)" : "");
     }
 
-    // Copies the picture out of the codec's buffer (it is given back right after) as NV12, I420 or
-    // P010, which Render converts like libgav1's.
+    // MediaImage2 (media/hardware/VideoAPI.h): type, plane count, width, height, bit depth,
+    // allocated bit depth, then per plane offset, column and row increments and subsampling.
+    // The first version lacks the allocated bit depth.
+    bool ReadImageData(const u8* data, size_t size) {
+        constexpr size_t PlaneSize = 5 * sizeof(u32);
+        size_t planes_at{};
+        if (size >= 6 * sizeof(u32) + 4 * PlaneSize) {
+            planes_at = 6 * sizeof(u32);
+        } else if (size >= 5 * sizeof(u32) + 4 * PlaneSize) {
+            planes_at = 5 * sizeof(u32);
+        } else {
+            return false;
+        }
+        const auto word = [&](size_t offset) {
+            u32 result;
+            std::memcpy(&result, data + offset, sizeof(result));
+            return result;
+        };
+        constexpr u32 TypeYuv = 1;
+        if (word(0) != TypeYuv || word(4) < 3) {
+            return false;
+        }
+        ten_bit = word(16) > 8;
+        for (size_t i = 0; i < 3; ++i) {
+            const size_t at = planes_at + i * PlaneSize;
+            planes[i] = {word(at), static_cast<s32>(word(at + 4)), static_cast<s32>(word(at + 8))};
+            const u32 subsampling = i == 0 ? 1 : 2;
+            if (word(at + 12) != subsampling || word(at + 16) != subsampling ||
+                planes[i].col_inc <= 0 || planes[i].row_inc <= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Copies the picture out of the codec's buffer (it is given back right after) as NV12, P010 or
+    // I420, which Render converts like libgav1's pictures.
     std::shared_ptr<FFmpeg::Frame> CopyPicture(const u8* data, size_t size) const {
         if (unsupported || width == 0 || height == 0) {
             return nullptr;
         }
-        const bool p010 = color_format == ColorYuvP010;
-        const bool planar = color_format == ColorYuv420Planar;
-        const size_t sample = p010 ? 2 : 1;
-        const size_t luma_size = static_cast<size_t>(stride) * static_cast<size_t>(slice_height);
-        const size_t chroma_rows = (static_cast<size_t>(slice_height) + 1) / 2;
-        const size_t needed = luma_size + (planar ? 2 * (stride / 2) * chroma_rows
-                                                  : static_cast<size_t>(stride) * chroma_rows);
-        if (size < needed) {
+        const u32 chroma_width = (width + 1) / 2;
+        const u32 chroma_height = (height + 1) / 2;
+        const auto end = [&](const Plane& plane, u32 plane_width, u32 plane_height, u32 x, u32 y) {
+            return plane.offset + static_cast<size_t>(y + plane_height - 1) * plane.row_inc +
+                   static_cast<size_t>(x + plane_width - 1) * plane.col_inc + (ten_bit ? 2 : 1);
+        };
+        if (end(planes[0], width, height, crop_x, crop_y) > size ||
+            end(planes[1], chroma_width, chroma_height, crop_x / 2, crop_y / 2) > size ||
+            end(planes[2], chroma_width, chroma_height, crop_x / 2, crop_y / 2) > size) {
+            return nullptr;
+        }
+        const size_t sample = ten_bit ? 2 : 1;
+        const bool interleaved = planes[1].col_inc == static_cast<s32>(2 * sample) &&
+                                 planes[2].col_inc == static_cast<s32>(2 * sample) &&
+                                 planes[2].offset == planes[1].offset + sample &&
+                                 planes[1].row_inc == planes[2].row_inc;
+        const bool planar = planes[1].col_inc == 1 && planes[2].col_inc == 1 && !ten_bit;
+        if (ten_bit && !interleaved) {
             return nullptr;
         }
         auto frame = std::make_shared<FFmpeg::Frame>();
         AVFrame* f = frame->GetFrame();
-        f->format = p010 ? AV_PIX_FMT_P010LE : planar ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_NV12;
+        f->format = ten_bit ? AV_PIX_FMT_P010LE : interleaved ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
         f->width = static_cast<int>(width);
         f->height = static_cast<int>(height);
         if (av_frame_get_buffer(f, 0) < 0) {
             return nullptr;
         }
-        const auto copy = [&](int plane, size_t offset, size_t source_stride, u32 rows, u32 x,
-                              u32 y, size_t row_bytes) {
-            for (u32 row = 0; row < rows; ++row) {
-                std::memcpy(f->data[plane] + static_cast<ptrdiff_t>(row) * f->linesize[plane],
-                            data + offset + (y + row) * source_stride + x, row_bytes);
+        const auto rows = [&](int target, const Plane& plane, u32 count, u32 x, u32 y,
+                              size_t bytes) {
+            for (u32 row = 0; row < count; ++row) {
+                std::memcpy(f->data[target] + static_cast<ptrdiff_t>(row) * f->linesize[target],
+                            data + plane.offset + static_cast<size_t>(y + row) * plane.row_inc +
+                                static_cast<size_t>(x) * plane.col_inc,
+                            bytes);
             }
         };
-        const u32 chroma_height = (height + 1) / 2;
-        copy(0, 0, static_cast<size_t>(stride), height, crop_x * sample, crop_y, width * sample);
-        if (planar) {
-            const size_t chroma_stride = static_cast<size_t>(stride) / 2;
-            const size_t chroma_width = (width + 1) / 2;
-            copy(1, luma_size, chroma_stride, chroma_height, crop_x / 2, crop_y / 2, chroma_width);
-            copy(2, luma_size + chroma_stride * chroma_rows, chroma_stride, chroma_height,
-                 crop_x / 2, crop_y / 2, chroma_width);
+        rows(0, planes[0], height, crop_x, crop_y, width * sample);
+        if (interleaved) {
+            rows(1, planes[1], chroma_height, crop_x / 2, crop_y / 2, chroma_width * 2 * sample);
+        } else if (planar) {
+            rows(1, planes[1], chroma_height, crop_x / 2, crop_y / 2, chroma_width);
+            rows(2, planes[2], chroma_height, crop_x / 2, crop_y / 2, chroma_width);
         } else {
-            // Interleaved Cb/Cr rows (NV12, or 16-bit samples for P010).
-            copy(1, luma_size, static_cast<size_t>(stride), chroma_height, (crop_x & ~1U) * sample,
-                 crop_y / 2, ((width + 1) & ~1U) * sample);
+            // Any other 8-bit layout (NV21, for one): sample by sample.
+            for (int target = 1; target <= 2; ++target) {
+                const Plane& plane = planes[target];
+                for (u32 row = 0; row < chroma_height; ++row) {
+                    u8* out = f->data[target] + static_cast<ptrdiff_t>(row) * f->linesize[target];
+                    const u8* in = data + plane.offset +
+                                   static_cast<size_t>(crop_y / 2 + row) * plane.row_inc +
+                                   static_cast<size_t>(crop_x / 2) * plane.col_inc;
+                    for (u32 x = 0; x < chroma_width; ++x) {
+                        out[x] = in[static_cast<size_t>(x) * plane.col_inc];
+                    }
+                }
+            }
         }
         f->color_range = full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
         return frame;
@@ -345,11 +438,11 @@ private:
     AMediaCodec* codec{};
     u32 width{1920};
     u32 height{1080};
-    s32 stride{1920};
-    s32 slice_height{1080};
     u32 crop_x{};
     u32 crop_y{};
-    s32 color_format{ColorYuv420SemiPlanar};
+    std::array<Plane, 3> planes{Plane{0, 1, 1920}, Plane{1920 * 1080, 2, 1920},
+                                Plane{1920 * 1080 + 1, 2, 1920}};
+    bool ten_bit{};
     bool full_range{};
     bool unsupported{};
 };
@@ -426,17 +519,32 @@ struct Nx2VideoDecoder::Impl {
         return status == libgav1::kStatusOk;
     }
 
+    /// Frames given to the hardware decoder before its first picture, replayed into libgav1 if
+    /// it is given up on (the movie's sequence header and key frame are among them).
+    std::vector<std::pair<std::vector<u8>, u64>> hardware_unanswered;
+
     // A hardware decoder that takes 30 frames without putting out a picture, or puts out a layout
-    // this can't read, is given up on for libgav1 (from the movie's next key frame).
+    // this can't read, is given up on for libgav1.
     void DecodeHardwareAv1(std::span<const u8> data, u64 pts, std::vector<Nx2Picture>& pictures) {
+        if (hardware_av1->outputs == 0) {
+            hardware_unanswered.emplace_back(std::vector<u8>(data.begin(), data.end()), pts);
+        }
         if (hardware_av1->Decode(data, pts, pictures) &&
             (hardware_av1->outputs != 0 || hardware_av1->inputs < 30)) {
+            if (hardware_av1->outputs != 0) {
+                hardware_unanswered.clear();
+            }
             return;
         }
         LOG_WARNING(HW_GPU, "nx2 video: hardware AV1 decoder gave {} pictures for {} frames; "
                     "using libgav1", hardware_av1->outputs, hardware_av1->inputs);
         hardware_av1.reset();
         open = OpenLibgav1();
+        if (open) {
+            for (const auto& [frame, frame_pts] : std::exchange(hardware_unanswered, {})) {
+                DecodeAv1(frame, frame_pts, pictures);
+            }
+        }
     }
 #endif
     SwsContext* scaler{};
