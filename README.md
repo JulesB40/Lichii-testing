@@ -24,6 +24,14 @@ Published builds belong on this fork's [releases page](https://github.com/zortos
 
 On Windows, extract the entire build archive and run **lichii.exe**. Only use games and system files you have legally obtained. Games, keys and firmware are not included.
 
+### Android
+
+Lichii for Android needs a 64-bit ARM device running Android 13 or newer with Vulkan 1.1. It is tuned for Snapdragon (Adreno) GPUs; other GPUs may work but are not a focus. Switch 2 games run with the 12 GB memory layout, so heavier games may run out of memory on phones with less RAM. Android builds are new and untested on most devices.
+
+1. Install `lichii-android-arm64.apk` from the release (allow installs from your browser or file manager when Android asks). It installs as its own app beside Eden.
+2. Open Lichii and follow the setup: grant notifications, pick your `prod.keys`, your firmware `.zip` and the folder with your games (`.xci`, `.nsp`, `.nsz`, `.xcz`, `.nup`).
+3. On Snapdragon, setup offers a Turnip driver recommended for your GPU. It is optional; the built-in driver works, and drivers can be changed later in **Settings → GPU driver manager**.
+
 ### Existing saves and settings
 
 The rebrand intentionally retains the existing Eden/Eglantine data directories and configuration keys. It does not move or delete saves, settings or shader caches. Back up your saves before testing experimental builds.
