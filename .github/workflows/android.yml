@@ -9,6 +9,7 @@ on:
       - "docs/**"
       - "**.md"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -62,11 +63,12 @@ jobs:
           restore-keys: |
             cpm-android-
 
-      - name: Cache compiler objects
-        uses: actions/cache@v5
+      # Restored and saved separately so a failed build still keeps the objects it compiled.
+      - name: Restore compiler objects
+        uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: objects-android-arm64-${{ github.sha }}
+          key: objects-android-arm64-${{ github.sha }}-${{ github.run_attempt }}
           restore-keys: |
             objects-android-arm64-
 
@@ -91,6 +93,13 @@ jobs:
           [ -n "$build_ninja" ] || exit 0
           "$ANDROID_HOME/cmake/3.31.5/bin/ninja" -C "$(dirname "$build_ninja")" -k 0 yuzu-android 2>&1 \
             | grep -E -A3 "error:|FAILED:|undefined (reference|symbol)" | head -600 || true
+
+      - name: Save compiler objects
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: objects-android-arm64-${{ github.sha }}-${{ github.run_attempt }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
