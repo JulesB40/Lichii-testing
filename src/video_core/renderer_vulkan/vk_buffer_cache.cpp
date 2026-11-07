@@ -399,8 +399,11 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
     limit_dynamic_storage_buffers = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
                                     driver_id == VK_DRIVER_ID_ARM_PROPRIETARY;
     if (limit_dynamic_storage_buffers) {
-        max_dynamic_storage_buffers = device.GetMaxDescriptorSetStorageBuffersDynamic();
-    }    
+        // Storage buffers are bound as VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, so the dynamic limit
+        // (16 on Adreno) does not apply to them.
+        max_dynamic_storage_buffers = (std::min)(device.GetMaxPerStageDescriptorStorageBuffers(),
+                                                 device.GetMaxDescriptorSetStorageBuffers());
+    }
     if (device.SupportsUint8Indices()) {
         uint8_pass = std::make_unique<Uint8Pass>(device, scheduler, descriptor_pool, staging_pool,
                                                  compute_pass_descriptor_queue);
