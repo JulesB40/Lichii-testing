@@ -256,7 +256,7 @@ public:
     /// Ocarina of Time with anti-aliasing at No sharpening (oot_network.h): true when this
     /// dispatch of the game's network is skipped, or its output pass replaced by a copy of the
     /// tonemapped image.
-    bool BypassOotNetwork(u64 program_id, u64 native_key);
+    bool BypassOotNetwork(u64 program_id, u64 native_key, u64 shader_hash);
     void TraceDlssContract(u64 native_key, bool warn_unvalidated = true);
 
     /// GPU thread split with macros on its front half (gpu_split.h, EDEN_NX2_SPLIT=2), called by

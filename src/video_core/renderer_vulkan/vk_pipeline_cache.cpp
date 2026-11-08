@@ -34,6 +34,7 @@
 #include "shader_recompiler/frontend/maxwell/translate_program.h"
 #include "shader_recompiler/ir_opt/passes.h"
 #include "shader_recompiler/program_header.h"
+#include "video_core/oot_network.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
@@ -1156,6 +1157,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, CACHE_VERSION, load_compute,
                                load_graphics);
     for (auto& [key, candidates] : compute_envs) {
+        // Ocarina's network can't run here, so its heavy dispatch is always skipped: don't build it.
+        if (title_id == VideoCommon::OotNetwork::ProgramId && !CanBuildGuestTensorOps() &&
+            key.unique_hash == VideoCommon::OotNetwork::HeavyShaderHash) {
+            continue;
+        }
         OrderComputeTranslations(candidates);
         queue_compute(key, std::move(candidates));
     }

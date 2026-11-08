@@ -425,6 +425,7 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
     VideoCommon::GpuSplit::Get().SetIdleHook(
         [](void* argument) { static_cast<Scheduler*>(argument)->FlushDeferred(); },
         &scheduler);
+    oot_network_bypass.network_unavailable = !pipeline_cache.CanBuildGuestTensorOps();
 }
 
 RasterizerVulkan::~RasterizerVulkan() {

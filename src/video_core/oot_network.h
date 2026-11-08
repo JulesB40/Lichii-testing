@@ -27,6 +27,10 @@ constexpr u64 PrepassProgramKey = 0x8475d671e6967428ULL;
 constexpr u64 NetworkProgramKey = 0x42593194bb0b2b32ULL;
 constexpr u64 OutputProgramKey = 0xda6df3e54c716df2ULL;
 
+/// Shader hash of the heavy dispatch between the prepass and the network. Its result only feeds
+/// the network.
+constexpr u64 HeavyShaderHash = 0xd9ee412f00ce399aULL;
+
 /// Constant buffer 0 offset of the output pass's texture handle for the B10G11R11 image it writes
 /// (the scene image the rest of the frame uses).
 constexpr u32 OutputImageHandleOffset = 0xd0;
@@ -46,11 +50,15 @@ struct BypassState {
     /// Render target 0 of the latest tonemap draw (address 0 until one is seen), under mutex.
     Tegra::Engines::Maxwell3D::Regs::RenderTargetConfig tonemapped{};
     std::atomic<bool> output_replaced{}; ///< the latest output pass was replaced
+    /// The device can't build the network's tensor passes (no cooperative matrices and no compute
+    /// shuffles, as on Qualcomm's driver), so the bypass is used whatever the setting. Set once.
+    bool network_unavailable{};
 };
 
-inline bool BypassEnabled(u64 program_id) {
+inline bool BypassEnabled(u64 program_id, const BypassState& state) {
     return program_id == ProgramId &&
-           Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::NoSharpening;
+           (state.network_unavailable || Settings::values.oot_anti_aliasing.GetValue() ==
+                                             Settings::OotAntiAliasing::NoSharpening);
 }
 
 } // namespace VideoCommon::OotNetwork

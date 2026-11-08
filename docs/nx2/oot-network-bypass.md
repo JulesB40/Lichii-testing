@@ -49,6 +49,15 @@ null and No sharpening does nothing, because DLSS replaces the same output pass
 `Ocarina of Time: No sharpening is off while NVIDIA DLSS is on` once. Once DLSS turns itself off
 for the session or its evaluation fails, No sharpening takes over from the next frame.
 
+## Devices that can't run the network
+
+Where guest tensor programs can't be built (no 16x16x16 cooperative matrices and no compute
+shuffles, as on Qualcomm's Adreno driver: `PipelineCache::CanBuildGuestTensorOps`), the output pass
+is rejected and the 3D scene stays black. The bypass is then used whatever the setting, and the
+heavy dispatch (`d9ee412f00ce399a`), whose result only feeds the network, is skipped and not built
+from the disk cache: on an Adreno 750 its driver build never finished and held gigabytes. The log
+says `Ocarina of Time: this device can't run the anti-aliasing network` once.
+
 The game's constants (shader hashes, program keys, the cb0 offset) are in
 `src/video_core/oot_network.h`.
 

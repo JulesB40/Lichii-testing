@@ -133,6 +133,14 @@ public:
 
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
 
+    /// Whether guest tensor (HMMA) programs can be built: on 16x16x16 cooperative matrices or
+    /// with compute shuffles.
+    [[nodiscard]] bool CanBuildGuestTensorOps() const noexcept {
+        return profile.support_cooperative_hmma_16x16x16 ||
+               (!profile.has_broken_spirv_subgroup_shuffle &&
+                !profile.has_broken_spirv_nonfragment_shuffle);
+    }
+
     void TickFrame();
 
     [[nodiscard]] ComputePipeline* CurrentComputePipeline();

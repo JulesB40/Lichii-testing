@@ -1068,14 +1068,26 @@ std::optional<Texture::TICEntry> KeplerCompute::ConstBuffer0Image(u32 offset) co
     return GetTICEntry(tic_index);
 }
 
-bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
+bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key, u64 shader_hash) {
     using namespace VideoCommon::OotNetwork;
-    if (!BypassEnabled(program_id)) {
+    if (program_id != ProgramId) {
         return false;
     }
     auto* const bypass = rasterizer->OotNetworkBypass();
-    if (!bypass) {
+    if (!bypass || !BypassEnabled(program_id, *bypass)) {
         return false;
+    }
+    if (bypass->network_unavailable) {
+        static bool logged = false;
+        if (!std::exchange(logged, true)) {
+            LOG_INFO(HW_GPU, "Ocarina of Time: this device can't run the anti-aliasing network; "
+                             "the tonemapped image is shown instead");
+        }
+        // Without the network the heavy dispatch's result is never read, and some drivers take
+        // minutes and gigabytes to build it (Adreno 750).
+        if (shader_hash == HeavyShaderHash) {
+            return true;
+        }
     }
     // The tonemap pass draws before the network every frame; until it has been seen (menus, the
     // first frame) the network runs as usual. Its first passes are skipped only while the output
