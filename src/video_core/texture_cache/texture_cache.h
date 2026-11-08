@@ -283,6 +283,13 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     critical_memory = (std::min)(critical_memory, max_critical);
     expected_memory =
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
+#ifdef __ANDROID__
+    // A phone's GPU memory is the system's: Ocarina of Time's gameplay holds ~3.5 GB of guest
+    // memory besides, and at the desktop thresholds (2816/3840 MiB on a 16 GB OnePlus 12) Android
+    // killed the emulator for low memory. 1024/1536 MiB kept it running.
+    critical_memory = (std::min)(critical_memory, u64{1536_MiB});
+    expected_memory = (std::min)(expected_memory, u64{1024_MiB});
+#endif
     minimum_memory =
         (std::min)(minimum_memory, expected_memory - (std::min)(expected_memory, u64{1_GiB}));
     // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB raise the collector's thresholds past

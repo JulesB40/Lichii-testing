@@ -338,16 +338,6 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     return info;
 }
 
-// Experiment: EDEN_NX2_QCOM_SHUFFLE=native emits real shuffles on Qualcomm instead of the
-// broadcast chain, =fragment only in fragment shaders.
-std::string_view QcomShuffleMode() {
-    static const std::string_view mode = [] {
-        const char* const value = std::getenv("EDEN_NX2_QCOM_SHUFFLE");
-        return std::string_view{value ? value : "chain"};
-    }();
-    return mode;
-}
-
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 2> runtime_spirv_ns{};
 
 void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point begin) {
@@ -586,12 +576,13 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .has_broken_spirv_subgroup_mask_vector_extract_dynamic =
             driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
             device.GetDriverVersion() < VK_MAKE_VERSION(512, 672, 0),
-        .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
-                                             QcomShuffleMode() != "native" &&
-                                             QcomShuffleMode() != "fragment",
+        .has_broken_spirv_subgroup_shuffle = false,
         .has_broken_spirv_fragment_shuffle = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY,
-        .has_broken_spirv_nonfragment_shuffle =
-            driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && QcomShuffleMode() == "fragment",
+        // Qualcomm's compiler crashes on shuffles in compute pipelines (libllvm-qgl, Adreno 750
+        // driver 512.762), so compute keeps the broadcast chain. Fragment shaders take real
+        // shuffles: through the chain, Ocarina of Time's first gameplay pass ran its loops to
+        // their limit and hung the GPU until the kernel reset it (device lost).
+        .has_broken_spirv_nonfragment_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
         .max_subgroup_size = device.GetMaxSubgroupSize(),
         .has_broken_robust =
             device.IsNvidia() && device.GetNvidiaArch() <= NvidiaArchitecture::Arch_Pascal,
