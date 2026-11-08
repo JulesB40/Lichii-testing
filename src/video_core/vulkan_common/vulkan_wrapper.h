@@ -783,7 +783,8 @@ public:
     Buffer(Buffer&& rhs) noexcept
         : handle{std::exchange(rhs.handle, VkBuffer{})}, owner{rhs.owner}, allocator{rhs.allocator},
           allocation{rhs.allocation}, mapped{rhs.mapped}, location{rhs.location},
-          is_coherent{rhs.is_coherent}, dld{rhs.dld} {}
+          is_coherent{rhs.is_coherent}, dld{rhs.dld}, host_view{std::exchange(rhs.host_view, {})},
+          host_view_coherent{rhs.host_view_coherent} {}
 
     Buffer& operator=(Buffer&& rhs) noexcept {
         Release();
@@ -795,6 +796,8 @@ public:
         location = rhs.location;
         is_coherent = rhs.is_coherent;
         dld = rhs.dld;
+        host_view = std::exchange(rhs.host_view, {});
+        host_view_coherent = rhs.host_view_coherent;
         return *this;
     }
 
@@ -838,6 +841,14 @@ public:
 
     void Invalidate() const;
 
+    /// The memory for the host to read, mapped on first use when its type is host visible (a
+    /// device-local buffer of an integrated GPU); empty otherwise. Unlike Mapped(), it does not
+    /// make IsHostVisible() true: writes still go through copies ordered with the GPU's work.
+    std::span<const u8> HostView();
+
+    /// Makes what the device wrote visible to HostView() reads.
+    void InvalidateHostView() const;
+
     void SetObjectNameEXT(const char* name) const;
 
     MemoryLocation Location() const noexcept {
@@ -855,6 +866,8 @@ private:
     MemoryLocation location{};
     bool is_coherent = false;
     const DeviceDispatch* dld = nullptr;
+    std::span<u8> host_view = {};
+    bool host_view_coherent = false;
 };
 
 class Queue {

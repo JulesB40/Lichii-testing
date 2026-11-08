@@ -74,6 +74,15 @@ public:
         return buffer.IsHostCoherent() ? buffer.Mapped() : std::span<const u8>{};
     }
 
+    /// The memory for direct host reads (see vk::Buffer::HostView).
+    [[nodiscard]] std::span<const u8> HostView() {
+        return buffer.HostView();
+    }
+
+    void InvalidateHostView() const {
+        buffer.InvalidateHostView();
+    }
+
     operator VkBuffer() const noexcept {
         return *buffer;
     }
@@ -134,6 +143,13 @@ public:
     void Finish(std::source_location location = std::source_location::current());
 
     void FinishForHostRead(std::source_location location = std::source_location::current());
+
+    /// Integrated phone GPUs: buffer downloads read the buffers' memory directly once the GPU
+    /// completed their last writes, instead of copying them and waiting for all its work.
+    [[nodiscard]] bool CanReadBuffersDirectly() const noexcept;
+
+    /// Waits for the GPU to complete `tick`, submitting it first when it is still recording.
+    void WaitTick(u64 tick);
 
     u64 GetDeviceLocalMemory() const;
 

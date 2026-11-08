@@ -86,6 +86,9 @@ enum class ObtainBufferOperation : u32 {
     MarkAsWritten = 1,
     DiscardWrite = 2,
     MarkQuery = 3,
+    /// The buffer is written on the GPU by what follows: record the write tick (a direct host
+    /// read waits for it) without marking the range modified or trapping its reads.
+    NoteGpuWrite = 4,
 };
 
 static constexpr BufferId NULL_BUFFER_ID{0};
@@ -592,6 +595,9 @@ private:
     void DownloadBufferMemory(Buffer& buffer_id);
 
     void DownloadBufferMemory(Buffer& buffer_id, DAddr device_addr, u64 size);
+
+    /// Records that commands now recorded write `buffer` (for direct host reads).
+    void NoteGpuWrite(Buffer& buffer);
 
     /// Downloads the GPU-written data of several buffers with one wait for the GPU.
     void DownloadBuffersMemory(std::span<const BufferId> buffer_ids);
