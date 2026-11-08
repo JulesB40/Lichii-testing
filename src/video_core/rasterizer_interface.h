@@ -34,6 +34,10 @@ struct TICEntry;
 }
 } // namespace Tegra
 
+namespace VideoCommon::OotNetwork {
+struct BypassState;
+}
+
 namespace VideoCore {
 
 enum class LoadCallbackStage {
@@ -148,10 +152,12 @@ public:
                                     [[maybe_unused]] VideoCommon::CacheType which) {}
 
     virtual void InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) {
-        if (!Settings::values.skip_cpu_inner_invalidation.GetValue()) {
-            for (const auto& [cpu_addr, size] : sequences) {
-                InvalidateRegion(cpu_addr, size);
-            }
+        // The skip keeps the texture cache: software engine writes reach images only here.
+        const auto which = Settings::values.skip_cpu_inner_invalidation.GetValue()
+                               ? VideoCommon::CacheType::TextureCache
+                               : VideoCommon::CacheType::All;
+        for (const auto& [cpu_addr, size] : sequences) {
+            InvalidateRegion(cpu_addr, size, which);
         }
     }
 
@@ -246,6 +252,12 @@ public:
     [[nodiscard]] virtual std::optional<VideoCore::GameDlssProbe> ProbeGameDlssOutput(
         const Tegra::Engines::Fermi2D::Surface& src, const Tegra::Engines::Fermi2D::Surface& dst) {
         return std::nullopt;
+    }
+
+    /// State of the Ocarina of Time anti-aliasing network bypass (oot_network.h), or null when
+    /// this backend cannot bypass it or NVIDIA DLSS replaces the same output pass.
+    [[nodiscard]] virtual VideoCommon::OotNetwork::BypassState* OotNetworkBypass() {
+        return nullptr;
     }
 
     [[nodiscard]] virtual Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() = 0;

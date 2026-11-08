@@ -129,6 +129,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 
 #ifdef ENABLE_UPDATE_CHECKER
 #include "frontend_common/update_checker.h"
+#include "frontend_common/update_installer.h"
 #endif
 
 // Common //
@@ -1678,6 +1679,65 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
+
+#if defined(ENABLE_UPDATE_CHECKER) && (defined(__linux__) || defined(_WIN32))
+    auto* restore_action = ui->menu_Help->addAction(tr("Restore Previous Version..."));
+    restore_action->setVisible(false);
+#ifdef __linux__
+    const auto previous_version = [] {
+        const std::filesystem::path target{qEnvironmentVariable("APPIMAGE").toStdString()};
+        std::error_code ec;
+        return !target.empty() && std::filesystem::is_regular_file(
+                                      UpdateInstaller::PreviousPath(target), ec)
+                   ? target
+                   : std::filesystem::path{};
+    };
+#else
+    const auto previous_version = [] {
+        const std::filesystem::path backup =
+            std::filesystem::path{QCoreApplication::applicationDirPath().toStdWString()} /
+            UpdateInstaller::BackupName;
+        std::error_code ec;
+        return std::filesystem::is_directory(backup, ec) ? backup : std::filesystem::path{};
+    };
+#endif
+    connect(ui->menu_Help, &QMenu::aboutToShow, restore_action,
+            [restore_action, previous_version] {
+                restore_action->setVisible(!previous_version().empty());
+            });
+    connect(restore_action, &QAction::triggered, this, [this, previous_version] {
+        const auto previous = previous_version();
+        if (previous.empty()) {
+            return;
+        }
+        const auto answer = QtCommon::Frontend::Question(
+            tr("Restore Previous Version"),
+            tr("Go back to the version this one replaced? Your settings and data are not "
+               "changed."),
+            QtCommon::Frontend::Yes | QtCommon::Frontend::No);
+        if (answer != QtCommon::Frontend::Yes) {
+            return;
+        }
+#ifdef __linux__
+        const UpdateInstaller::Lock lock{UpdateInstaller::LockPath(previous)};
+        std::error_code ec;
+        if (!lock.Held()) {
+            ec = std::make_error_code(std::errc::device_or_resource_busy);
+        }
+        if (!lock.Held() || !UpdateInstaller::Rollback(previous, ec)) {
+            LOG_ERROR(Frontend, "Could not restore the previous version: {}", ec.message());
+            QtCommon::Frontend::Critical(tr("Failed to restore"),
+                                         tr("Could not restore the previous version: %1")
+                                             .arg(QString::fromStdString(ec.message())));
+            return;
+        }
+        LOG_INFO(Frontend, "Restored the previous version of {}", previous.string());
+        UpdateDialog::Restart(this, QString::fromStdString(previous.string()));
+#else
+        UpdateDialog::LaunchInstaller(this, QString::fromStdWString(previous.wstring()));
+#endif
+    });
+#endif
 }
 
 void MainWindow::UpdateMenuState() {
@@ -2269,7 +2329,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     emulation_running = true;
     if (ui->action_Fullscreen->isChecked()) {
         ShowFullscreen();
-    } else {
+    } else if (!(ui->action_Single_Window_Mode->isChecked() ? isMaximized()
+                                                            : render_window->isMaximized())) {
         if (Settings::IsDockedMode()) {
             ResetWindowSize1080();
         } else {
@@ -3585,6 +3646,17 @@ void MainWindow::ResetWindowSize(u32 width, u32 height) {
     const auto aspect_ratio = Layout::EmulationAspectRatio(Settings::values.aspect_ratio.GetValue(),
                                                            float(height) / width);
     const bool single_window = ui->action_Single_Window_Mode->isChecked();
+    // Resizing a maximized window leaves it marked as maximized at the new size, stuck in a corner.
+    if (single_window && isMaximized()) {
+        showNormal();
+    } else if (!single_window && render_window->isMaximized()) {
+        // A stopped game hides the render window; showNormal() would show it again.
+        if (render_window->isHidden()) {
+            render_window->setWindowState(render_window->windowState() & ~Qt::WindowMaximized);
+        } else {
+            render_window->showNormal();
+        }
+    }
     const bool show_status_bar = ui->action_Show_Status_Bar->isChecked();
     const auto status_bar_height = (single_window && show_status_bar) ? statusBar()->height() : 0;
     const auto menu_bar_height = single_window ? menuBar()->height() : 0;

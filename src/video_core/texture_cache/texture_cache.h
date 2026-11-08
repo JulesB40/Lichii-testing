@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <vector>
+#include <tuple>
 #include <optional>
 #include <bit>
 #include <string>
@@ -28,14 +29,15 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
-#include "video_core/texture_cache/image_view_base.h"
-#include "video_core/texture_cache/conversion.h"
-#include "video_core/texture_cache/samples_helper.h"
-#include "video_core/texture_cache/texture_cache_base.h"
-#include "video_core/texture_cache/util.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/render_trace.h"
+#include "video_core/texture_cache/conversion.h"
+#include "video_core/texture_cache/host_mip_limits.h"
+#include "video_core/texture_cache/image_view_base.h"
+#include "video_core/texture_cache/samples_helper.h"
+#include "video_core/texture_cache/texture_cache_base.h"
+#include "video_core/texture_cache/util.h"
 #include "video_core/textures/decoders.h"
 
 namespace VideoCommon {
@@ -136,15 +138,16 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
 }
 
 template <class P>
-void TextureCache<P>::RunGarbageCollector() {
+void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     bool high_priority_mode = false;
     bool aggressive_mode = false;
     bool evict_old_costly = false;
     u64 ticks_to_destroy = 0;
     size_t num_iterations = 0;
     const auto Configure = [&](bool allow_aggressive) {
-        high_priority_mode = total_used_memory >= expected_memory;
-        aggressive_mode = allow_aggressive && total_used_memory >= critical_memory;
+        high_priority_mode = out_of_memory || total_used_memory >= expected_memory;
+        aggressive_mode =
+            allow_aggressive && (out_of_memory || total_used_memory >= critical_memory);
         ticks_to_destroy = aggressive_mode ? 10ULL : high_priority_mode ? 25ULL : 50ULL;
         // EDEN_NX2_TC_MIN_AGE=<frames>: never evict images used more recently (thrash tests).
         static const u64 min_age = [] {
@@ -155,7 +158,7 @@ void TextureCache<P>::RunGarbageCollector() {
         num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
     };
     const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,
-                          &evict_old_costly](ImageId image_id) {
+                          &evict_old_costly, out_of_memory](ImageId image_id) {
         if (num_iterations == 0) {
             return true;
         }
@@ -183,6 +186,9 @@ void TextureCache<P>::RunGarbageCollector() {
         ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
         UnregisterImage(image_id);
         DeleteImage(image_id, image.scale_tick > frame_tick + 5);
+        if (out_of_memory) {
+            return false;
+        }
         if (aggressive_mode && total_used_memory < critical_memory) {
             num_iterations >>= 2;
             aggressive_mode = false;
@@ -254,7 +260,7 @@ void TextureCache<P>::RunGarbageCollector() {
         evict_old_costly = false;
     }
     Collect();
-    if (total_used_memory >= critical_memory) {
+    if (out_of_memory || total_used_memory >= critical_memory) {
         Configure(true);
         Collect();
     }
@@ -262,21 +268,35 @@ void TextureCache<P>::RunGarbageCollector() {
 
 template <class P>
 void TextureCache<P>::ApplyThresholdOverrides(bool log) {
-    // On every GPU: past what a frame needs, more device memory only keeps the textures of earlier
-    // scenes (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
-    // MaxCriticalMemory on rather than near the card's budget.
-    critical_memory = (std::min)(critical_memory, MaxCriticalMemory);
+    // Past what a frame needs, more device memory only keeps the textures of earlier scenes
+    // (title 1 filled 6.7 GB of an 8 GB card and draws its races in ~5 GB), so collect from
+    // MaxCriticalMemory on rather than near the card's budget. Larger cards get 5/8 of the
+    // driver's budget (GetDeviceLocalMemory is capped near 7 GiB): at 5 GiB title 1's races
+    // recreate and upload ~8 MiB of render targets a frame (16 GB card: 53 -> 59 fps at 10 GiB).
+    // What the device budget allows (budget minus margins), before that cap.
+    const u64 budget_critical = critical_memory;
+    const u64 budget_expected = expected_memory;
+    u64 max_critical = MaxCriticalMemory;
+    if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
+        max_critical = (std::max)(max_critical, runtime.GetDeviceMemoryBudget() / 8 * 5);
+    }
+    critical_memory = (std::min)(critical_memory, max_critical);
     expected_memory =
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
     minimum_memory =
         (std::min)(minimum_memory, expected_memory - (std::min)(expected_memory, u64{1_GiB}));
-    // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB override the collector's thresholds.
-    for (const auto& [name, target] : {std::pair{"EDEN_NX2_TC_EXPECTED_MIB", &expected_memory},
-                                       std::pair{"EDEN_NX2_TC_CRITICAL_MIB", &critical_memory}}) {
+    // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB raise the collector's thresholds past
+    // MaxCriticalMemory, but never past what the device budget allows: set outright, they kept
+    // the cache above a shrinking budget (other programs' video memory, out-of-memory margins) and
+    // the driver paged (drops to 9 fps on an 8 GB card in Ocarina's Kokiri Forest).
+    for (const auto& [name, target, limit] :
+         {std::tuple{"EDEN_NX2_TC_EXPECTED_MIB", &expected_memory, budget_expected},
+          std::tuple{"EDEN_NX2_TC_CRITICAL_MIB", &critical_memory, budget_critical}}) {
         if (const char* value = std::getenv(name)) {
-            *target = std::strtoull(value, nullptr, 10) << 20;
+            *target = (std::min)(static_cast<u64>(std::strtoull(value, nullptr, 10)) << 20, limit);
         }
     }
+    expected_memory = (std::min)(expected_memory, critical_memory);
     if (log) {
         LOG_INFO(HW_GPU, "Texture cache thresholds: expected {} MiB, critical {} MiB, minimum {} MiB",
                  expected_memory >> 20, critical_memory >> 20, minimum_memory >> 20);
@@ -313,7 +333,7 @@ void TextureCache<P>::TickFrame() {
         // unused. Both thresholds stay under it with a margin (1/8 of it, at most 1 GiB): past it
         // allocations fail and images end up unbacked (garbage textures), and Windows shrinks the
         // budget as the card fills (16 GB card: 13.5 GB left mid-race), hence the re-read every 30
-        // frames. EDEN_NX2_TC_*_MIB overrides still win.
+        // frames. EDEN_NX2_TC_*_MIB overrides can raise the thresholds up to this budget.
         if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
             if constexpr (requires { runtime.MemoryPressureEvents(); }) {
                 // Images that did not fit (made in host memory or with nothing bound) mean the
@@ -455,8 +475,24 @@ void TextureCache<P>::TickFrame() {
         gc_deletes = gc_costly_deletes = gc_download_deletes = async_decodes_queued = 0;
         images_created = images_deleted = 0;
     }
-    if (total_used_memory > minimum_memory) {
-        RunGarbageCollector();
+    // An image that could not be made at all: the driver is out of memory whatever the counts
+    // say, so collect as at the critical threshold.
+    bool out_of_memory = false;
+    if constexpr (requires { runtime.FailedImages(); }) {
+        const u32 failed = runtime.FailedImages();
+        out_of_memory = failed != seen_failed_images;
+        seen_failed_images = failed;
+    }
+    if (out_of_memory || total_used_memory > minimum_memory) {
+        RunGarbageCollector(out_of_memory);
+    }
+    if (out_of_memory) {
+        // Textures left out for lack of memory are made again on their next read, once a frame
+        // while images keep failing.
+        for (size_t c : active_channel_ids) {
+            channel_storage[c].graphics_image_table.Invalidate();
+            channel_storage[c].compute_image_table.Invalidate();
+        }
     }
     sentenced_images.Tick();
     sentenced_image_index = (sentenced_image_index + 1) % TICKS_TO_DESTROY;
@@ -888,7 +924,22 @@ ImageViewId TextureCache<P>::VisitImageView(u32 index, bool compute) {
         if (IsValidEntry(*gpu_memory, descriptor)) {
             const auto [pair, is_new_tc] = channel_state->image_views.try_emplace(descriptor);
             if (is_new_tc) {
+                const auto failed_images = [&]() -> u32 {
+                    if constexpr (requires { runtime.FailedImages(); }) {
+                        return runtime.FailedImages();
+                    } else {
+                        return 0;
+                    }
+                };
+                const u32 failed_before = failed_images();
                 pair->second = CreateImageView(descriptor);
+                if (pair->second == NULL_IMAGE_VIEW_ID && failed_images() != failed_before) {
+                    // No memory for its image: TickFrame invalidates the table after collecting,
+                    // and the descriptor's next read makes the image again.
+                    channel_state->image_views.erase(pair);
+                    table.bound_ids[index] = NULL_IMAGE_VIEW_ID;
+                    return NULL_IMAGE_VIEW_ID;
+                }
                 if (pair->second != NULL_IMAGE_VIEW_ID) {
                     image_view_descriptors[pair->second].emplace_back(current_channel_id,
                                                                       descriptor);
@@ -2233,6 +2284,17 @@ bool TextureCache<P>::ImageCanRescale(ImageBase& image) {
     if (Settings::values.resolution_info.downscale && !image.info.downscaleable) {
         return false;
     }
+    if (Settings::values.resolution_info.downscale) {
+        const auto& info = image.info;
+        const auto& resolution = Settings::values.resolution_info;
+        const u32 levels = HostMipLevelCount(info.size.width, info.size.height, info.size.depth,
+                                             static_cast<u32>(info.resources.levels));
+        const u32 width = resolution.ScaleUp(info.size.width);
+        const u32 height =
+            info.type == ImageType::e2D ? resolution.ScaleUp(info.size.height) : info.size.height;
+        if (HostMipLevelCount(width, height, info.size.depth, levels) < levels)
+            return false;
+    }
     if (True(image.flags & (ImageFlagBits::Rescaled | ImageFlagBits::CheckingRescalable))) {
         return true;
     }
@@ -2561,6 +2623,9 @@ ImageId TextureCache<P>::InsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
                  static_cast<u32>(info.format), info.block.width, info.block.height, info.block.depth);
     }
     const ImageId image_id = JoinImages(storage_info, gpu_addr, *cpu_addr);
+    if (!image_id) {
+        return image_id;
+    }
     const Image& image = slot_images[image_id];
     // Using "image.gpu_addr" instead of "gpu_addr" is important because it might be different
     const auto [it, is_new] = image_allocs_table.try_emplace(image.gpu_addr);
@@ -2683,6 +2748,20 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         }
     }
     const ImageId new_image_id = slot_images.insert(runtime, new_info, gpu_addr, cpu_addr);
+    if constexpr (requires(const Image& image) { image.OutOfMemory(); }) {
+        if (slot_images[new_image_id].OutOfMemory()) {
+            // Left out of the cache: lookups see no image (a null view) and make it again once
+            // the collector has freed memory.
+            slot_images.erase(new_image_id);
+            static u32 logged{};
+            if (logged++ < 32) {
+                LOG_ERROR(HW_GPU, "No memory for the {}x{}x{} image at {:#x} (format {}); skipping it",
+                          new_info.size.width, new_info.size.height, new_info.size.depth, gpu_addr,
+                          static_cast<u32>(new_info.format));
+            }
+            return ImageId{};
+        }
+    }
     Image& new_image = slot_images[new_image_id];
 
     new_image.allocation_tick = frame_tick;
@@ -2926,6 +3005,9 @@ std::optional<typename TextureCache<P>::BlitImages> TextureCache<P>::GetBlitImag
             dst_id = InsertImage(dst_info, dst_addr, RelaxedOptions{});
         }
     } while (has_deleted_images);
+    if (!src_id || !dst_id) {
+        return std::nullopt;
+    }
     const ImageBase& src_image = slot_images[src_id];
     const ImageBase& dst_image = slot_images[dst_id];
     const bool native_bgr = runtime.HasNativeBgr();
@@ -2941,6 +3023,9 @@ std::optional<typename TextureCache<P>::BlitImages> TextureCache<P>::GetBlitImag
             src_id = FindOrInsertImage(src_info, src_addr, RelaxedOptions{});
             dst_id = FindOrInsertImage(dst_info, dst_addr, RelaxedOptions{});
         } while (has_deleted_images);
+        if (!src_id || !dst_id) {
+            return std::nullopt;
+        }
     }
     return {BlitImages{
         .dst_id = dst_id,
@@ -3321,6 +3406,7 @@ void TextureCache<P>::RegisterImage(ImageId image_id) {
     if (False(image.flags & ImageFlagBits::Sparse)) {
         auto map_id =
             slot_map_views.insert(image.gpu_addr, image.cpu_addr, image.guest_size_bytes, image_id);
+        page_filter.Mark(image.cpu_addr, image.guest_size_bytes);
         ForEachCPUPage(image.cpu_addr, image.guest_size_bytes,
                        [this, map_id](u64 page) { page_table[page].push_back(map_id); });
         image.map_view_id = map_id;
@@ -3330,6 +3416,7 @@ void TextureCache<P>::RegisterImage(ImageId image_id) {
     ForEachSparseSegment(
         image, [this, image_id, &sparse_maps](GPUVAddr gpu_addr, DAddr cpu_addr, size_t size) {
             auto map_id = slot_map_views.insert(gpu_addr, cpu_addr, size, image_id);
+            page_filter.Mark(cpu_addr, size);
             ForEachCPUPage(cpu_addr, size,
                            [this, map_id](u64 page) { page_table[page].push_back(map_id); });
             sparse_maps.push_back(map_id);

@@ -6,10 +6,12 @@
 
 add_executable(tests
     common/addon_config.cpp
+    video_core/vulkan_overlay_filter.cpp
     video_core/buffer_cache_ports.cpp
     video_core/unswizzle_workers.cpp
     video_core/aftermath_dump.cpp
     video_core/frame_dump_schedule.cpp
+    video_core/host_mip_limits.cpp
     video_core/gpu_timestamp.cpp
     core/nx2_streamplay.cpp
     core/nx2_video_ready.cpp
@@ -53,7 +55,9 @@ add_executable(tests
     video_core/maxwell_numeric.cpp
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
+    video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
+    video_core/framebuffer_limits.cpp
     video_core/fire_emblem_upscale.cpp
     video_core/dlss_contract.cpp
     video_core/ampere_fast_fusion.cpp
@@ -66,6 +70,7 @@ add_executable(tests
     video_core/spirv_atomic_retry.cpp
     video_core/spirv_storage_alignment.cpp
     video_core/spirv_fragment_shuffle.cpp
+    video_core/mesh_fallback.cpp
     video_core/multi_range_refresh.cpp
     video_core/command_fetch_order.cpp
     video_core/gpu_written_pages.cpp
@@ -103,6 +108,7 @@ add_executable(tests
     video_core/spirv_builtin_capabilities.cpp
     video_core/spirv_min_max_denorms.cpp
     video_core/spirv_nan_safe_min_max.cpp
+    video_core/virtual_range_cache.cpp
     common/bit_field.cpp
     common/cityhash.cpp
     common/container_hash.cpp
@@ -136,6 +142,7 @@ add_executable(tests
     core/priority_queue.cpp
     core/internal_network/network.cpp
     video_core/memory_tracker.cpp
+    video_core/invalidation_accumulator.cpp
     video_core/memory_manager_runs.cpp
     video_core/nx2_perf_draw_binds.cpp
     video_core/nx2_perf_texture_writes.cpp
@@ -156,6 +163,7 @@ add_executable(tests
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
+    video_core/descriptor_payload_growth.cpp
     video_core/global_address_tracking.cpp
     video_core/global_atomic_routing.cpp
     video_core/nvn_storage_descriptor.cpp
@@ -192,7 +200,9 @@ endif()
 
 add_executable(update_checker_tests
     common/update_checker.cpp
-    ../frontend_common/update_checker.cpp)
+    common/update_installer.cpp
+    ../frontend_common/update_checker.cpp
+    ../frontend_common/update_installer.cpp)
 target_link_libraries(update_checker_tests PRIVATE common Catch2::Catch2WithMain)
 add_test(NAME update_checker_tests COMMAND update_checker_tests)
 
