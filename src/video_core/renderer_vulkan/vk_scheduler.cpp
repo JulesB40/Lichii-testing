@@ -46,6 +46,16 @@ std::atomic<u64> g_profile_finish_ns{};
 std::atomic<u64> g_profile_window_start{};
 std::mutex g_profile_end_mutex;
 std::map<std::string, u64> g_profile_ends;
+/// Finishes per call site: count and nanoseconds spent, under g_profile_end_mutex.
+std::map<std::string, std::pair<u64, u64>> g_profile_finish_sites;
+
+std::string ProfileSite(const char* file, u32 line) {
+    std::string_view name{file};
+    if (const auto slash = name.find_last_of("/\\"); slash != std::string_view::npos) {
+        name.remove_prefix(slash + 1);
+    }
+    return fmt::format("{}:{}", name, line);
+}
 
 void CountRenderPassEnd(const char* file, u32 line) {
     if (!VideoCommon::Nx2Profile::Enabled()) {
@@ -90,6 +100,21 @@ void ReportSubmitCounts() {
     for (size_t i = 0; i < ends.size() && i < 16; ++i) {
         LOG_INFO(Render_Vulkan, "Render pass ends {:.0f}/s at {}",
                  static_cast<double>(ends[i].first) / seconds, ends[i].second);
+    }
+    std::vector<std::pair<std::pair<u64, u64>, std::string>> finishes;
+    {
+        std::scoped_lock lock{g_profile_end_mutex};
+        for (const auto& [site, totals] : g_profile_finish_sites) {
+            finishes.emplace_back(std::pair{totals.second, totals.first}, site);
+        }
+        g_profile_finish_sites.clear();
+    }
+    std::sort(finishes.rbegin(), finishes.rend());
+    for (size_t i = 0; i < finishes.size() && i < 8; ++i) {
+        LOG_INFO(Render_Vulkan, "Finishes {:.0f}/s waiting {:.1f} ms/s at {}",
+                 static_cast<double>(finishes[i].first.second) / seconds,
+                 static_cast<double>(finishes[i].first.first) / 1e6 / seconds,
+                 finishes[i].second);
     }
 }
 }
@@ -267,9 +292,14 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
     last_flush = std::chrono::steady_clock::now();
     flush_pending = false;
     if (profile) {
+        const u64 ns = VideoCommon::Nx2Profile::Now() - start;
         g_profile_finishes.fetch_add(1, std::memory_order_relaxed);
-        g_profile_finish_ns.fetch_add(VideoCommon::Nx2Profile::Now() - start,
-                                      std::memory_order_relaxed);
+        g_profile_finish_ns.fetch_add(ns, std::memory_order_relaxed);
+        std::scoped_lock lock{g_profile_end_mutex};
+        auto& [count, total_ns] =
+            g_profile_finish_sites[ProfileSite(location.file_name(), location.line())];
+        ++count;
+        total_ns += ns;
     }
 }
 

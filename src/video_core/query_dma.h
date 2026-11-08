@@ -25,6 +25,16 @@ inline bool TraceEnabled() {
     return enabled;
 }
 
+/// Experiment: EDEN_NX2_QUERY_DMA_WAIT=0 lets MME DMA reads take reports as they are instead of
+/// waiting for pending host results (each wait drains the GPU).
+inline bool WaitEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_QUERY_DMA_WAIT");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 /// Whether [source, source + size) holds reports still waiting for host query results. Runs
 /// where the rasterizer's caches are owned (the back of a split GPU thread).
 inline bool HasPendingQueries(const Tegra::MemoryManager& memory,

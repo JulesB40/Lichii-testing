@@ -1444,7 +1444,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         VideoCommon::QueryDma::Trace(memory, maxwell3d.Rasterizer(), method, address,
                                                      source, read_bytes);
                     }
-                    if (owns_caches) {
+                    if (owns_caches && VideoCommon::QueryDma::WaitEnabled()) {
                         VideoCommon::QueryDma::FlushPending(memory, maxwell3d.Rasterizer(), source,
                                                             read_bytes);
                     }
