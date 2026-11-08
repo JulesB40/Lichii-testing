@@ -148,10 +148,13 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
         }
     }
 
-    if (const char* value = std::getenv("EDEN_NX2_LOSS_TRACE"); value && value[0] == '1') {
+    if (const char* value = std::getenv("EDEN_NX2_LOSS_TRACE");
+        value && (value[0] == '1' || value[0] == '2')) {
         loss_trace = true;
+        loss_sync = value[0] == '2';
         device.SetLossReporter([this] { ReportLossTrace(); });
-        LOG_INFO(Render_Vulkan, "EDEN_NX2_LOSS_TRACE: device loss logs the unfinished submissions");
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_LOSS_TRACE: device loss logs the last submissions{}",
+                 loss_sync ? "; each submission is waited for" : "");
     }
 
     AcquireNewChunk();
@@ -679,24 +682,55 @@ void Scheduler::ReportLossTrace() const {
     for (size_t i = loss_submissions.size() - LoggedSubmissions; i < loss_submissions.size(); ++i) {
         const LossSubmission& submission =
             loss_submissions[(loss_next + i) % loss_submissions.size()];
-        if (submission.tick == 0) {
-            continue;
+        if (submission.tick != 0) {
+            LogLossSubmission(submission, submission.tick <= gpu_tick ? "finished" : "unfinished",
+                              now);
         }
-        LOG_CRITICAL(Render_Vulkan,
-                     "Loss trace: {} tick {} submitted {:.1f} ms before: {} draws, {} dispatches, "
-                     "{} shaders",
-                     submission.tick <= gpu_tick ? "finished" : "unfinished", submission.tick,
-                     std::chrono::duration<double, std::milli>(now - submission.submitted).count(),
-                     submission.draws, submission.dispatches, submission.shaders.size());
-        // Stage 6 is compute; uses count draws or dispatches.
-        std::string line;
-        for (size_t s = 0; s < submission.shaders.size(); ++s) {
-            const auto& use = submission.shaders[s];
-            line += fmt::format(" s{}:{:016x}x{}", use.stage, use.hash, use.uses);
-            if (s % 12 == 11 || s + 1 == submission.shaders.size()) {
-                LOG_CRITICAL(Render_Vulkan, "Loss trace: tick {}:{}", submission.tick, line);
-                line.clear();
-            }
+    }
+}
+
+void Scheduler::LogLossSubmission(const LossSubmission& submission, std::string_view state,
+                                  std::chrono::steady_clock::time_point now) const {
+    LOG_CRITICAL(Render_Vulkan,
+                 "Loss trace: {} tick {} submitted {:.1f} ms before: {} draws, {} dispatches, {} "
+                 "shaders",
+                 state, submission.tick,
+                 std::chrono::duration<double, std::milli>(now - submission.submitted).count(),
+                 submission.draws, submission.dispatches, submission.shaders.size());
+    // Stage 6 is compute; uses count draws or dispatches.
+    std::string line;
+    for (size_t s = 0; s < submission.shaders.size(); ++s) {
+        const auto& use = submission.shaders[s];
+        line += fmt::format(" s{}:{:016x}x{}", use.stage, use.hash, use.uses);
+        if (s % 12 == 11 || s + 1 == submission.shaders.size()) {
+            LOG_CRITICAL(Render_Vulkan, "Loss trace: tick {}:{}", submission.tick, line);
+            line.clear();
+        }
+    }
+}
+
+// EDEN_NX2_LOSS_TRACE=2: only this submission is in flight, so if it is the one that hangs, the
+// wait takes as long as the kernel's hang timeout (or fails) and its shaders are logged.
+void Scheduler::WaitLossSubmission(u64 tick) {
+    const auto start = std::chrono::steady_clock::now();
+    try {
+        master_semaphore->Wait(tick);
+    } catch (const vk::Exception& exception) {
+        if (exception.GetResult() == VK_ERROR_DEVICE_LOST) {
+            LOG_CRITICAL(Render_Vulkan, "Loss trace: waiting for tick {} lost the device", tick);
+            device.ReportLoss();
+        }
+        throw;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - start).count();
+    if (ms < 250.0) {
+        return;
+    }
+    std::scoped_lock lock{loss_mutex};
+    for (const LossSubmission& submission : loss_submissions) {
+        if (submission.tick == tick) {
+            LogLossSubmission(submission, fmt::format("slow ({:.1f} ms on the GPU)", ms), now);
         }
     }
 }
@@ -900,7 +934,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             on_submit();
         }
 
-        std::scoped_lock lock{submit_mutex};
+        std::unique_lock lock{submit_mutex};
         if (loss_trace) {
             NoteLossQueue(fmt::format("submit tick {} signal {:#x} wait {:#x}", signal_value,
                                       std::bit_cast<u64>(signal_semaphore),
@@ -939,6 +973,10 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
                 trace_gpu_sampling = true;
             }
             trace_frame_end = 0;
+        }
+        if (loss_sync) {
+            lock.unlock();
+            WaitLossSubmission(signal_value);
         }
     });
     chunk->MarkSubmit();

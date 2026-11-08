@@ -17,6 +17,7 @@
 #include <queue>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "common/alignment.h"
@@ -501,6 +502,8 @@ private:
 
     /// EDEN_NX2_LOSS_TRACE=1: the shaders of the last submissions, in first-use order. On device
     /// loss, the last ones are logged: a hang the kernel resets retires its submission as finished.
+    /// EDEN_NX2_LOSS_TRACE=2 also waits for each submission and logs the slow ones, so a hang is
+    /// pinned to its submission.
     struct LossSubmission {
         struct ShaderUse {
             u64 hash{};
@@ -515,7 +518,11 @@ private:
     };
     void NoteLossShader(u64 hash, u32 stage);
     void ReportLossTrace() const;
+    void LogLossSubmission(const LossSubmission& submission, std::string_view state,
+                           std::chrono::steady_clock::time_point now) const;
+    void WaitLossSubmission(u64 tick);
     bool loss_trace{};
+    bool loss_sync{};
     LossSubmission loss_current;
     std::array<LossSubmission, 16> loss_submissions;
     size_t loss_next{};
