@@ -593,7 +593,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
         return;
     }
-    if (VideoCommon::OotNetwork::BypassEnabled(Settings::GetCurrentProgramID())) {
+    if (VideoCommon::OotNetwork::BypassEnabled(Settings::GetCurrentProgramID(),
+                                               oot_network_bypass)) {
         TrackOotTonemappedImage(*pipeline);
     }
     // Task/mesh pipelines: the draw's vertex count is the number of task workgroups.
