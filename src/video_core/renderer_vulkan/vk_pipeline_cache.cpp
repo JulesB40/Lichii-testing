@@ -337,12 +337,14 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     return info;
 }
 
-bool QcomNativeShuffle() {
-    static const bool native = [] {
+// Experiment: EDEN_NX2_QCOM_SHUFFLE=native emits real shuffles on Qualcomm instead of the
+// broadcast chain, =fragment only in fragment shaders.
+std::string_view QcomShuffleMode() {
+    static const std::string_view mode = [] {
         const char* const value = std::getenv("EDEN_NX2_QCOM_SHUFFLE");
-        return value != nullptr && std::string_view{value} == "native";
+        return std::string_view{value ? value : "chain"};
     }();
-    return native;
+    return mode;
 }
 
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 2> runtime_spirv_ns{};
@@ -583,11 +585,12 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .has_broken_spirv_subgroup_mask_vector_extract_dynamic =
             driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
             device.GetDriverVersion() < VK_MAKE_VERSION(512, 672, 0),
-        // Experiment: EDEN_NX2_QCOM_SHUFFLE=native emits real shuffles on Qualcomm instead of
-        // the broadcast chain.
         .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
-                                             !QcomNativeShuffle(),
+                                             QcomShuffleMode() != "native" &&
+                                             QcomShuffleMode() != "fragment",
         .has_broken_spirv_fragment_shuffle = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY,
+        .has_broken_spirv_nonfragment_shuffle =
+            driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && QcomShuffleMode() == "fragment",
         .max_subgroup_size = device.GetMaxSubgroupSize(),
         .has_broken_robust =
             device.IsNvidia() && device.GetNvidiaArch() <= NvidiaArchitecture::Arch_Pascal,
@@ -600,7 +603,9 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
              "Subgroups: size {}, max {}, operations {:#x}, stages {:#x}, shuffle {}",
              device.GetSubgroupSize(), device.GetMaxSubgroupSize(),
              device.GetSubgroupSupportedOperations(), device.GetSubgroupSupportedStages(),
-             profile.has_broken_spirv_subgroup_shuffle ? "broadcast chain" : "native");
+             profile.has_broken_spirv_subgroup_shuffle       ? "broadcast chain"
+             : profile.has_broken_spirv_nonfragment_shuffle ? "native in fragment shaders"
+                                                            : "native");
     profile.support_cooperative_hmma_16x16x16 =
         !profile.support_cooperative_hmma && device.IsCooperativeHmma16x16x16Supported();
     if (profile.support_cooperative_hmma_16x16x16) {
