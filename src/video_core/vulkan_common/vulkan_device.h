@@ -558,6 +558,14 @@ FN_MAX_LIMIT_LIST
         return properties.subgroup_properties.supportedStages;
     }
 
+    VkSubgroupFeatureFlags GetSubgroupSupportedOperations() const {
+        return properties.subgroup_properties.supportedOperations;
+    }
+
+    u32 GetSubgroupSize() const {
+        return properties.subgroup_properties.subgroupSize;
+    }
+
     u32 GetMaxSubgroupSize() const {
         return (std::max)(properties.subgroup_properties.subgroupSize,
                           properties.subgroup_size_control.maxSubgroupSize);

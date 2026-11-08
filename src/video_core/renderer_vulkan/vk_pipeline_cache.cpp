@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -336,6 +337,14 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     return info;
 }
 
+bool QcomNativeShuffle() {
+    static const bool native = [] {
+        const char* const value = std::getenv("EDEN_NX2_QCOM_SHUFFLE");
+        return value != nullptr && std::string_view{value} == "native";
+    }();
+    return native;
+}
+
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 2> runtime_spirv_ns{};
 
 void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point begin) {
@@ -574,7 +583,10 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .has_broken_spirv_subgroup_mask_vector_extract_dynamic =
             driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
             device.GetDriverVersion() < VK_MAKE_VERSION(512, 672, 0),
-        .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
+        // Experiment: EDEN_NX2_QCOM_SHUFFLE=native emits real shuffles on Qualcomm instead of
+        // the broadcast chain.
+        .has_broken_spirv_subgroup_shuffle = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
+                                             !QcomNativeShuffle(),
         .has_broken_spirv_fragment_shuffle = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY,
         .max_subgroup_size = device.GetMaxSubgroupSize(),
         .has_broken_robust =
@@ -584,6 +596,11 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     };
     profile.support_cooperative_hmma =
         device.IsCooperativeHmmaSupported() && TestCooperativeHmma(device);
+    LOG_INFO(Render_Vulkan,
+             "Subgroups: size {}, max {}, operations {:#x}, stages {:#x}, shuffle {}",
+             device.GetSubgroupSize(), device.GetMaxSubgroupSize(),
+             device.GetSubgroupSupportedOperations(), device.GetSubgroupSupportedStages(),
+             profile.has_broken_spirv_subgroup_shuffle ? "broadcast chain" : "native");
     profile.support_cooperative_hmma_16x16x16 =
         !profile.support_cooperative_hmma && device.IsCooperativeHmma16x16x16Supported();
     if (profile.support_cooperative_hmma_16x16x16) {
