@@ -280,6 +280,26 @@ StagingBufferPool::StagingBuffersCache& StagingBufferPool::GetCache(MemoryUsage 
     }
 }
 
+void StagingBufferPool::LogStatistics() {
+    for (const auto [usage, name] :
+         {std::pair{MemoryUsage::DeviceLocal, "device local"}, std::pair{MemoryUsage::Upload, "upload"},
+          std::pair{MemoryUsage::Download, "download"}}) {
+        u64 bytes{}, busy_bytes{}, largest{};
+        size_t buffers{};
+        for (const StagingBuffers& level : GetCache(usage)) {
+            for (const StagingBuffer& entry : level.entries) {
+                const u64 size = u64{1} << entry.log2_level;
+                bytes += size;
+                busy_bytes += scheduler.IsFree(entry.tick) ? 0 : size;
+                largest = (std::max)(largest, size);
+                ++buffers;
+            }
+        }
+        LOG_INFO(Render_Vulkan, "Staging buffers, {}: {} buffers {} MiB ({} MiB in use), largest {} MiB",
+                 name, buffers, bytes >> 20, busy_bytes >> 20, largest >> 20);
+    }
+}
+
 void StagingBufferPool::ReleaseCache(MemoryUsage usage) {
     ReleaseLevel(GetCache(usage), current_delete_level);
 }

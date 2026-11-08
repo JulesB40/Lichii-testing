@@ -46,6 +46,9 @@ public:
 
     void TickFrame();
 
+    /// Logs the buffers each cache holds (EDEN_NX2_TC_LOG).
+    void LogStatistics();
+
 private:
     struct StreamBufferCommit {
         size_t upper_bound;

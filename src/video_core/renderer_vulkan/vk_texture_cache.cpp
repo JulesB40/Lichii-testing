@@ -2874,6 +2874,7 @@ bool TextureCacheRuntime::CanReportMemoryUsage() const {
 
 void TextureCacheRuntime::LogMemoryStatistics() const {
     Vulkan::LogMemoryStatistics(device);
+    staging_buffer_pool.LogStatistics();
 }
 
 bool TextureCacheRuntime::UseOpaqueAstcFormat() const {

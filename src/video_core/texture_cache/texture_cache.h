@@ -408,11 +408,18 @@ void TextureCache<P>::TickFrame() {
         }
         total_used_memory -= (std::min)(total_used_memory, gpu_sentenced_bytes);
     }
-    // Every 600 frames: device memory in use against the collector's thresholds.
-    // Skip expensive heap allocation, map construction, and sorting unless debug logging is explicitly enabled.
-    static const bool log_tc = std::getenv("EDEN_NX2_TC_LOG") != nullptr;
+    // EDEN_NX2_TC_LOG[=<frames>]: every 600 frames (or that many), device memory in use against
+    // the collector's thresholds.
+    static const u64 log_period = [] {
+        const char* const value = std::getenv("EDEN_NX2_TC_LOG");
+        if (value == nullptr) {
+            return u64{0};
+        }
+        const u64 frames = std::strtoull(value, nullptr, 10);
+        return frames != 0 ? frames : u64{600};
+    }();
     static u64 frames{};
-    if (log_tc && ++frames % 600 == 0) {
+    if (log_period != 0 && ++frames % log_period == 0) {
         u64 image_bytes{};
         size_t images{};
         std::vector<std::pair<u64, const Image*>> largest;
@@ -451,12 +458,12 @@ void TextureCache<P>::TickFrame() {
         if constexpr (requires { runtime.LogMemoryStatistics(); }) {
             runtime.LogMemoryStatistics();
         }
-        LOG_INFO(HW_GPU, "Texture cache last 600 frames: created {} images, deleted {} (collector {}, {} costly, {} downloaded), {} async decodes, ASTC {} opaque / {} alpha",
-                 images_created, images_deleted, gc_deletes + gc_costly_deletes, gc_costly_deletes,
+        LOG_INFO(HW_GPU, "Texture cache last {} frames: created {} images, deleted {} (collector {}, {} costly, {} downloaded), {} async decodes, ASTC {} opaque / {} alpha",
+                 log_period, images_created, images_deleted, gc_deletes + gc_costly_deletes, gc_costly_deletes,
                  gc_download_deletes,
                  async_decodes_queued, astc_opaque_images, astc_alpha_images);
-        LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} uploads from guest memory, {} MiB (largest {} MiB, {} by layer)",
-                 images_uploaded, uploaded_bytes >> 20, largest_upload >> 20, layer_uploads);
+        LOG_INFO(HW_GPU, "Texture cache last {} frames: {} uploads from guest memory, {} MiB (largest {} MiB, {} by layer)",
+                 log_period, images_uploaded, uploaded_bytes >> 20, largest_upload >> 20, layer_uploads);
         images_uploaded = uploaded_bytes = largest_upload = layer_uploads = 0;
         astc_opaque_images = astc_alpha_images = 0;
         std::vector<std::pair<u32, u64>> shapes;
