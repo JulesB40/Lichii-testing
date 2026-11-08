@@ -72,7 +72,7 @@ size_t BytesPerIndex(VkIndexType index_type) {
 }
 
 vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allocator, u64 size,
-                        VkDeviceSize sparse_alignment) {
+                        VkDeviceSize sparse_alignment, bool host_readable) {
     VkBufferUsageFlags flags =
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
         VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
@@ -101,6 +101,9 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
     if (sparse_alignment > 1) {
         return memory_allocator.CreateBuffer(buffer_ci, MemoryUsage::DeviceLocal, sparse_alignment);
     }
+    if (host_readable) {
+        return memory_allocator.CreateHostReadableBuffer(buffer_ci);
+    }
     return memory_allocator.CreateBuffer(
         buffer_ci, device.IsMoltenVK() ? MemoryUsage::Stream : MemoryUsage::DeviceLocal);
 }
@@ -124,7 +127,8 @@ Buffer::Buffer(BufferCacheRuntime& runtime, DAddr cpu_addr_, u64 size_bytes_,
     : VideoCommon::BufferBase(cpu_addr_, size_bytes_), device{&runtime.device},
       scheduler{&runtime.scheduler},
       buffer{CreateBuffer(*device, runtime.memory_allocator, SizeBytes(),
-                          runtime.SparseAlignmentFor(sparse_compatible_))},
+                          runtime.SparseAlignmentFor(sparse_compatible_),
+                          runtime.CanReadBuffersDirectly())},
       tracker{SizeBytes()} {
     sparse_compatible = sparse_compatible_;
     if (runtime.device.HasDebuggingToolAttached()) {

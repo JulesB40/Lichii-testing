@@ -473,6 +473,40 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
                       location, device.GetDispatchLoader());
 }
 
+vk::Buffer MemoryAllocator::CreateHostReadableBuffer(const VkBufferCreateInfo &ci) const {
+    // Qualcomm's driver lists a device-local type the host can't map first, which VMA picks for
+    // DeviceLocal; asking for host access picks a device-local type it can. Sequential-write
+    // access prefers an uncached type: the GPU reads it as fast, and the host reads little.
+    const VmaAllocationCreateInfo alloc_ci = {
+        .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        .preferredFlags = 0,
+        .memoryTypeBits = valid_memory_types,
+        .pool = VK_NULL_HANDLE,
+        .pUserData = nullptr,
+        .priority = 0.f,
+    };
+    VkBuffer handle{};
+    VmaAllocation allocation{};
+    VmaAllocationInfo alloc_info{};
+    if (vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info) !=
+        VK_SUCCESS) {
+        return CreateBuffer(ci, MemoryUsage::DeviceLocal);
+    }
+    VkMemoryPropertyFlags property_flags{};
+    vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
+    const vk::MemoryLocation location{
+        .memory = alloc_info.deviceMemory,
+        .offset = alloc_info.offset,
+        .memory_type = alloc_info.memoryType,
+    };
+    return vk::Buffer(handle, *device.GetLogical(), allocator, allocation, std::span<u8>{},
+                      (property_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0, location,
+                      device.GetDispatchLoader());
+}
+
 vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
                                          VkDeviceSize min_alignment) const {
     if (min_alignment <= 1) {

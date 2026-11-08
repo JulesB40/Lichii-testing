@@ -147,6 +147,11 @@ namespace Vulkan {
         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
                                 VkDeviceSize min_alignment) const;
 
+        /// A device-local buffer in a memory type the host can also map, for direct host reads
+        /// on integrated GPUs (vk::Buffer::HostView). Not mapped: writes still go through copies.
+        /// Falls back to a plain device-local buffer.
+        vk::Buffer CreateHostReadableBuffer(const VkBufferCreateInfo &ci) const;
+
         /**
          * Commits a memory with the specified requirements.
          *
