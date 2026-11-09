@@ -8,6 +8,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -373,6 +375,25 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
 
 std::array<std::atomic<std::chrono::nanoseconds::rep>, 2> runtime_spirv_ns{};
 
+/// EDEN_NX2_SHADER_DUMP=<dir> also keeps the SPIR-V each shader translates to, named by shader
+/// hash and stage (the hashes the frame dump, the loss trace and EDEN_NX2_REJECT_HASH use).
+void DumpStageSpirv(u64 shader_hash, std::string_view stage, std::span<const u32> code) {
+    static const char* const directory = std::getenv("EDEN_NX2_SHADER_DUMP");
+    if (directory == nullptr || code.empty()) {
+        return;
+    }
+    const auto path =
+        std::filesystem::path{directory} / fmt::format("{:016x}-{}.spv", shader_hash, stage);
+    std::error_code error;
+    if (std::filesystem::exists(path, error)) {
+        return;
+    }
+    std::filesystem::create_directories(path.parent_path(), error);
+    std::ofstream file{path, std::ios::binary};
+    file.write(reinterpret_cast<const char*>(code.data()),
+               static_cast<std::streamsize>(code.size_bytes()));
+}
+
 void AddRuntimeSpirvTime(size_t thread, std::chrono::steady_clock::time_point begin) {
     const auto elapsed = std::chrono::steady_clock::now() - begin;
     runtime_spirv_ns[thread].fetch_add(
@@ -388,6 +409,15 @@ vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& p
     const auto code =
         EmitPipelineShader(profile, runtime_info, program, binding, shader_hash, reference);
     device.SaveShader(code);
+    {
+        static constexpr std::array stage_names{"vertex", "tess_control", "tess_eval", "geometry",
+                                               "fragment"};
+        DumpStageSpirv(shader_hash,
+                       program.stage == Shader::Stage::Mesh   ? "mesh"
+                       : program.stage == Shader::Stage::Task ? "task"
+                                                              : stage_names[stage_index],
+                       code);
+    }
     vk::ShaderModule module{BuildShader(device, code)};
 
     // Text log + .spv dump. Text log is gated by gpu_log_level != Off; .spv dump
@@ -2458,6 +2488,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     }
     std::vector<u32> code{EmitSPIRV(profile, program)};
     device.SaveShader(code);
+    DumpStageSpirv(key.unique_hash, "compute", code);
     vk::ShaderModule spv_module{BuildShader(device, code)};
 
     // Text log + .spv dump. Same split as the graphics path.
