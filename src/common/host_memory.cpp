@@ -59,6 +59,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <random>
+#include <string>
 #include <utility>
 
 #include "common/alignment.h"
@@ -639,7 +640,23 @@ public:
             unlink(template_path);
         }
 #else
-        fd = memfd_create("HostMemory", 0);
+        // Experiment: EDEN_NX2_GUEST_FILE=<dir> backs guest memory with an unlinked file in <dir>
+        // instead of memfd. Under memory pressure a memfd can only be compressed into zram, still in
+        // RAM; a file's pages are written back to storage and dropped (phones short of RAM).
+        if (const char* const dir = std::getenv("EDEN_NX2_GUEST_FILE"); dir != nullptr && *dir) {
+            std::string path = std::string{dir} + "/eden_guest_XXXXXX";
+            fd = mkstemp(path.data());
+            if (fd >= 0) {
+                unlink(path.c_str());
+                LOG_INFO(Common_Memory, "Guest memory backed by a file in {}", dir);
+            } else {
+                LOG_WARNING(Common_Memory, "EDEN_NX2_GUEST_FILE: mkstemp in {}: {}", dir,
+                            strerror(errno));
+            }
+        }
+        if (fd < 0) {
+            fd = memfd_create("HostMemory", 0);
+        }
 #endif
         bool use_anon = false;
         if (fd <= 0) {
