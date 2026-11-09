@@ -693,7 +693,12 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .support_conditional_barrier = device.SupportsConditionalBarriers(),
         .single_lane_geometry_subgroups = !profile.SupportsSubgroupStage(Shader::Stage::Geometry),
         .support_byte_addressed_r16 = true,
-        .lower_packed_int64_shifts = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
+        // Experiment: EDEN_NX2_QCOM_PACKED_SHIFTS=0 keeps 64-bit funnel shifts (the mesh
+        // pipelines they break fail again) to compare memory use while loading.
+        .lower_packed_int64_shifts = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY && [] {
+            const char* const value = std::getenv("EDEN_NX2_QCOM_PACKED_SHIFTS");
+            return value == nullptr || value[0] != '0';
+        }(),
     };
     host_info.ApplyDescriptorLimitPolicy();
 
