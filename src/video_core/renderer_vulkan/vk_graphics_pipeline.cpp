@@ -1516,8 +1516,10 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
             .pNext = nullptr,
             .requiredSubgroupSize = GuestWarpSize,
         };
-        const auto make_compute = [&](VkShaderModule module, VkPipelineLayout layout,
-                                      const Shader::Info* info) {
+        // A failed build names its part and program: the graphics pipeline's failure log
+        // otherwise reports the mesh program's slot as a tessellation stage.
+        const auto make_compute = [&](const char* part, u64 shader_hash, VkShaderModule module,
+                                      VkPipelineLayout layout, const Shader::Info* info) {
             const bool uses_warp_ops{info && (info->uses_subgroup_vote ||
                                               info->uses_subgroup_invocation_id ||
                                               info->uses_subgroup_shuffles ||
@@ -1525,36 +1527,54 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                                               info->uses_quad_shuffles || info->uses_fswzadd)};
             const bool force_warp_size{uses_warp_ops && device.IsExtSubgroupSizeControlSupported() &&
                                        device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT)};
-            return device.GetLogical().CreateComputePipeline(
-                VkComputePipelineCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-                    .pNext = nullptr,
-                    .flags = 0,
-                    .stage{
-                        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                        .pNext = force_warp_size ? &compute_subgroup_size_ci : nullptr,
+            const std::array<u64, 1> traced{shader_hash};
+            TracePipelineBuild("BEGIN", part, key.Hash(), traced, false);
+            const auto trace_begin = std::chrono::steady_clock::now();
+            vk::Pipeline result;
+            try {
+                result = device.GetLogical().CreateComputePipeline(
+                    VkComputePipelineCreateInfo{
+                        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+                        .pNext = nullptr,
                         .flags = 0,
-                        .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                        .module = module,
-                        .pName = "main",
-                        .pSpecializationInfo = nullptr,
+                        .stage{
+                            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                            .pNext = force_warp_size ? &compute_subgroup_size_ci : nullptr,
+                            .flags = 0,
+                            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                            .module = module,
+                            .pName = "main",
+                            .pSpecializationInfo = nullptr,
+                        },
+                        .layout = layout,
+                        .basePipelineHandle = nullptr,
+                        .basePipelineIndex = 0,
                     },
-                    .layout = layout,
-                    .basePipelineHandle = nullptr,
-                    .basePipelineIndex = 0,
-                },
-                *pipeline_cache);
+                    *pipeline_cache);
+            } catch (const vk::Exception& exception) {
+                LOG_CRITICAL(Render_Vulkan,
+                             "Mesh emulation {} pipeline build failed: {} (pipeline {:016x}, "
+                             "shader {:016x})",
+                             part, exception.what(), key.Hash(), shader_hash);
+                throw;
+            }
+            TracePipelineBuild("END", part, key.Hash(), traced, false,
+                               std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - trace_begin)
+                                   .count());
+            return result;
         };
+        const u32 mesh_stage{mesh_emulation->mesh_stage};
         mesh_vertex_module = BuildShader(device, mesh_emulation->vertex_spirv);
-        mesh_compute_pipeline = make_compute(*spv_modules[mesh_emulation->mesh_stage],
-                                             *pipeline_layout,
-                                             &stage_infos[mesh_emulation->mesh_stage]);
+        mesh_compute_pipeline =
+            make_compute("mesh-compute", key.unique_hashes[mesh_stage + 1], *spv_modules[mesh_stage],
+                         *pipeline_layout, &stage_infos[mesh_stage]);
         if (mesh_emulation->has_task) {
-            task_compute_pipeline =
-                make_compute(*spv_modules[0], *pipeline_layout, &stage_infos[0]);
+            task_compute_pipeline = make_compute("task-compute", key.unique_hashes[1],
+                                                 *spv_modules[0], *pipeline_layout, &stage_infos[0]);
             distribution_module = BuildShader(device, mesh_emulation->distribution_spirv);
-            distribution_pipeline =
-                make_compute(*distribution_module, *distribution_layout, nullptr);
+            distribution_pipeline = make_compute("mesh-distribution", 0, *distribution_module,
+                                                 *distribution_layout, nullptr);
         }
     }
     FixedPipelineState::DynamicState dynamic{};
