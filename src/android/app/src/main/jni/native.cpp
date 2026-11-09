@@ -20,6 +20,8 @@
 #include <thread>
 #include <vector>
 #include <dlfcn.h>
+
+#include <android/log.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -181,6 +183,14 @@ void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
         handle = adrenotools_open_libvulkan(
             RTLD_NOW, featureFlags | ADRENOTOOLS_DRIVER_CUSTOM, nullptr, hook_lib_dir.c_str(),
             custom_driver_dir.c_str(), custom_driver_name.c_str(), file_redirect_dir_, nullptr);
+        // The fallback below is otherwise silent. Logging isn't set up yet this early: logcat.
+        if (!handle) {
+            const char* const error = dlerror();
+            __android_log_print(ANDROID_LOG_ERROR, "Lichii",
+                                "Custom GPU driver %s%s failed to load, using the system driver: %s",
+                                custom_driver_dir.c_str(), custom_driver_name.c_str(),
+                                error ? error : "no dlerror");
+        }
     }
 
     // Try to load the system driver.
