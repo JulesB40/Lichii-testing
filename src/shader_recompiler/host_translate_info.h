@@ -44,6 +44,9 @@ struct HostTranslateInfo {
                                         ///< control flow
     bool single_lane_geometry_subgroups{};
     bool support_byte_addressed_r16{};
+    /// Funnel shifts (SHF) shift their register pair as two 32-bit words instead of one 64-bit
+    /// integer, with 64-bit integers otherwise kept (see LowerInt64PackedShifts).
+    bool lower_packed_int64_shifts{};
 
     /// The properties that change which values translation reads from the environment, a bit
     /// each: those deciding a pass that reads values, or a pass that changes the program before

@@ -444,6 +444,8 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     }
     if (!normalized_host_info.support_int64) {
         Optimization::LowerInt64ToInt32(program);
+    } else if (normalized_host_info.lower_packed_int64_shifts) {
+        Optimization::LowerInt64PackedShifts(program);
     }
     if (!normalized_host_info.support_conditional_barrier) {
         Optimization::ConditionalBarrierPass(program);

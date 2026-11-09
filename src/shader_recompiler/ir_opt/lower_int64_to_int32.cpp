@@ -359,4 +359,56 @@ void LowerInt64ToInt32(IR::Program& program) {
     }
 }
 
+void LowerInt64PackedShifts(IR::Program& program) {
+    // Only 64-bit shifts of a packed register pair (funnel shifts) become 32-bit code; other 64-bit
+    // integers stay. Qualcomm's Adreno compiler (driver 512.762) refuses a compute shader that
+    // runs FindUMsb on a word unpacked from such a shift, with VK_ERROR_UNKNOWN: Ocarina of
+    // Time's position-only mesh programs, built as compute shaders by mesh emulation.
+    bool lowered{};
+    for (IR::Block* const block : program.blocks) {
+        for (IR::Inst& inst : block->Instructions()) {
+            const IR::Opcode opcode{inst.GetOpcode()};
+            if (opcode != IR::Opcode::ShiftLeftLogical64 &&
+                opcode != IR::Opcode::ShiftRightLogical64 &&
+                opcode != IR::Opcode::ShiftRightArithmetic64) {
+                continue;
+            }
+            const IR::Value packed{inst.Arg(0)};
+            if (packed.IsImmediate() || inst.HasAssociatedPseudoOperation() ||
+                packed.InstRecursive()->GetOpcode() != IR::Opcode::PackUint2x32) {
+                continue;
+            }
+            inst.SetArg(0, packed.InstRecursive()->Arg(0));
+            switch (opcode) {
+            case IR::Opcode::ShiftLeftLogical64:
+                ShiftLeftLogical64To32(*block, inst);
+                break;
+            case IR::Opcode::ShiftRightLogical64:
+                ShiftRightLogical64To32(*block, inst);
+                break;
+            default:
+                ShiftRightArithmetic64To32(*block, inst);
+                break;
+            }
+            lowered = true;
+        }
+    }
+    if (!lowered) {
+        return;
+    }
+    // The lowered shifts give a pair of words: their unpacks pass it through.
+    for (IR::Block* const block : program.blocks) {
+        for (IR::Inst& inst : block->Instructions()) {
+            if (inst.GetOpcode() != IR::Opcode::UnpackUint2x32) {
+                continue;
+            }
+            const IR::Value source{inst.Arg(0).Resolve()};
+            if (!source.IsImmediate() &&
+                source.InstRecursive()->GetOpcode() == IR::Opcode::CompositeConstructU32x2) {
+                inst.ReplaceOpcode(IR::Opcode::Identity);
+            }
+        }
+    }
+}
+
 } // namespace Shader::Optimization
