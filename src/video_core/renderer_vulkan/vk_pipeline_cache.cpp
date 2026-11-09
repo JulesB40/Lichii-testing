@@ -1094,14 +1094,31 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     size_t precache_capture_bytes = 0;
 
     if (use_vulkan_pipeline_cache) {
+        // One file per driver: a driver drops another's data and then replaces the shared file
+        // with its own, so trying a custom driver (Turnip on an Adreno) cost the system driver its
+        // whole cache, and the next boot rebuilt every pipeline (15+ minutes for Ocarina of Time).
+        const std::string driver_stem =
+            fmt::format("vulkan_pipelines.driver{}", static_cast<u32>(device.GetDriverID()));
         vulkan_pipeline_cache_filename =
-            VideoCommon::VersionedPipelineCachePath(base_dir, "vulkan_pipelines", CACHE_VERSION);
-        if (VideoCommon::CarryOverPipelineCache(
-                base_dir, "vulkan_pipelines", VULKAN_CACHE_MAGIC_NUMBER,
-                VideoCommon::CompatibleVulkanPipelineCacheVersions, CACHE_VERSION)
-                .failed) {
+            VideoCommon::VersionedPipelineCachePath(base_dir, driver_stem, CACHE_VERSION);
+        const auto carried = VideoCommon::CarryOverPipelineCache(
+            base_dir, driver_stem, VULKAN_CACHE_MAGIC_NUMBER,
+            VideoCommon::CompatibleVulkanPipelineCacheVersions, CACHE_VERSION);
+        if (carried.failed) {
             LOG_WARNING(Render_Vulkan,
                         "Couldn't copy the older driver pipeline cache; this one starts empty");
+        }
+        // The shared file of earlier builds starts this driver's; the driver drops it if it was
+        // another driver's. It is copied, so the other driver can still start from it.
+        std::error_code exists_error;
+        const auto shared_cache =
+            VideoCommon::VersionedPipelineCachePath(base_dir, "vulkan_pipelines", CACHE_VERSION);
+        if (!carried.version && !std::filesystem::exists(vulkan_pipeline_cache_filename, exists_error) &&
+            VideoCommon::PipelineCacheHeaderMatches(shared_cache, VULKAN_CACHE_MAGIC_NUMBER,
+                                                    CACHE_VERSION)) {
+            VideoCommon::CopyCompatiblePipelineCache(shared_cache, vulkan_pipeline_cache_filename,
+                                                     VULKAN_CACHE_MAGIC_NUMBER, CACHE_VERSION,
+                                                     CACHE_VERSION);
         }
         vulkan_pipeline_cache =
             LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
