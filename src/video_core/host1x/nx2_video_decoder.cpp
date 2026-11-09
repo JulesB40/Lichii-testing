@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <optional>
 #include <set>
@@ -28,6 +29,7 @@ extern "C" {
 #pragma GCC diagnostic ignored "-Wconversion"
 #endif
 
+#include <libavutil/hwcontext.h>
 #include <libswscale/swscale.h>
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -619,6 +621,7 @@ struct Nx2VideoDecoder::Impl {
 
 Nx2VideoDecoder::Nx2VideoDecoder(std::string_view mime) : impl{std::make_unique<Impl>()} {
     impl->name = std::string{mime};
+    const auto start = std::chrono::steady_clock::now();
 #ifdef EDEN_NX2_LIBGAV1
     // AV1 goes to libgav1 where FFmpeg has no libdav1d (Android's FFmpeg package); FFmpeg's own
     // "av1" decoder only drives hardware decoders.
@@ -645,12 +648,31 @@ Nx2VideoDecoder::Nx2VideoDecoder(std::string_view mime) : impl{std::make_unique<
         return;
     }
     impl->context.emplace(*impl->decoder);
-    if (Settings::values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Gpu) {
+    AVCodecContext* const context = impl->context->GetCodecContext();
+    const std::string_view decoder_name = impl->decoder->GetCodec()->name;
+    const bool gpu = Settings::values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Gpu;
+    if (gpu) {
         impl->hardware.emplace();
         impl->hardware->InitializeForDecoder(*impl->context, *impl->decoder);
     }
     impl->open = impl->context->OpenContext(*impl->decoder);
-    LOG_INFO(HW_GPU, "nx2 video: decoder for \"{}\" {}", mime, impl->open ? "open" : "failed to open");
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+    if (!impl->open) {
+        LOG_ERROR(HW_GPU, "nx2 video: {} failed to open for \"{}\"", decoder_name, mime);
+    } else if (context->hw_device_ctx) {
+        const auto* device =
+            reinterpret_cast<const AVHWDeviceContext*>(context->hw_device_ctx->data);
+        LOG_INFO(HW_GPU, "nx2 video: \"{}\" decodes on the GPU ({}) with {}, opened in {} ms", mime,
+                 av_hwdevice_get_type_name(device->type), decoder_name, ms);
+    } else {
+        LOG_INFO(HW_GPU,
+                 "nx2 video: \"{}\" decodes on the CPU with {}, {} threads ({}), opened in {} ms",
+                 mime, decoder_name,
+                 context->thread_count ? std::to_string(context->thread_count) : "default",
+                 gpu ? "no usable GPU decoder" : "NVDEC emulation is CPU", ms);
+    }
 }
 
 Nx2VideoDecoder::~Nx2VideoDecoder() = default;

@@ -49,6 +49,9 @@ public:
     /// Logs the buffers each cache holds (EDEN_NX2_TC_LOG).
     void LogStatistics();
 
+    /// Bytes of the cached staging buffers of a kind, idle or in use (EDEN_NX2_MEM_TRACE).
+    [[nodiscard]] u64 CachedBytes(MemoryUsage usage);
+
 private:
     struct StreamBufferCommit {
         size_t upper_bound;
