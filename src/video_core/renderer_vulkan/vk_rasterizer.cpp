@@ -356,7 +356,29 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
         return arena.counted && arena.size < mesh_arena_size;
     });
     auto it{std::ranges::find_if(mesh_arenas, [](const MeshArena& arena) { return arena.counted; })};
+    // Each submission with task draws holds an arena until the GPU finishes it. On a phone, GPU
+    // memory is the system's: Ocarina of Time's vegetation in every submission of a GPU-bound
+    // frame queue got the emulator killed for low memory. Past the limit, wait for the oldest.
+#ifdef __ANDROID__
+    constexpr size_t max_arenas = 3;
+#else
+    constexpr size_t max_arenas = 8;
+#endif
+    if (it == mesh_arenas.end() && mesh_arenas.size() >= max_arenas) {
+        const auto oldest{std::ranges::min_element(
+            mesh_arenas, [](const MeshArena& lhs, const MeshArena& rhs) { return lhs.tick < rhs.tick; })};
+        static u64 waits{};
+        if (++waits == 1 || waits % 1000 == 0) {
+            LOG_INFO(Render_Vulkan, "Mesh emulation: {} waits for one of {} output arenas", waits,
+                     mesh_arenas.size());
+        }
+        scheduler.Wait(oldest->tick);
+        mesh_arena_current = ~size_t{};
+        return AcquireMeshArena();
+    }
     if (it == mesh_arenas.end()) {
+        LOG_INFO(Render_Vulkan, "Mesh emulation: output arena {} of {} MiB", mesh_arenas.size() + 1,
+                 mesh_arena_size >> 20);
         const auto make_buffer = [&](u64 size, VkBufferUsageFlags usage, MemoryUsage memory) {
             return memory_allocator.CreateBuffer(
                 VkBufferCreateInfo{
