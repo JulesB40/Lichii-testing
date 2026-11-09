@@ -119,8 +119,8 @@ void ReportSubmitCounts() {
 }
 }
 
-void Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
-                                         vk::CommandBuffer upload_cmdbuf) {
+void Scheduler::CommandChunk::ExecuteAll(const vk::CommandBuffer& cmdbuf,
+                                         const vk::CommandBuffer& upload_cmdbuf) {
     auto command = first;
     while (command != nullptr) {
         auto next = command->GetNext();
@@ -180,6 +180,12 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
         device.SetLossReporter([this] { ReportLossTrace(); });
         LOG_INFO(Render_Vulkan, "EDEN_NX2_LOSS_TRACE: device loss logs the last submissions{}",
                  loss_sync ? "; each submission is waited for" : "");
+    }
+
+    if (const char* value = std::getenv("EDEN_NX2_MESH_PREPASS"); value && value[0] == '1') {
+        prepass_enabled = true;
+        LOG_INFO(Render_Vulkan, "EDEN_NX2_MESH_PREPASS: mesh emulation dispatches ahead of the "
+                                "render pass instead of ending it");
     }
 
     AcquireNewChunk();
@@ -500,6 +506,48 @@ void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location lo
         CountRenderPassEnd(location.file_name(), location.line());
     }
     EndRenderPass();
+}
+
+void Scheduler::OpenPrePass() {
+    EndRenderPass();
+    // A query can't span command buffers.
+    query_cache->CounterEnable(VideoCommon::QueryType::ZPassPixelCount64, false);
+    RecordWithUploadBuffer([this](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
+        if (std::exchange(prepass_recording, true)) {
+            prepass_cmdbuf.End();
+        }
+        cmdbuf.End();
+        earlier_cmdbufs.push_back(*cmdbuf);
+        const auto begin = [this] {
+            const vk::CommandBuffer next{command_pool->Commit(), device.GetDispatchLoader()};
+            next.Begin({
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = nullptr,
+            });
+            return next;
+        };
+        prepass_cmdbuf = begin();
+        earlier_cmdbufs.push_back(*prepass_cmdbuf);
+        current_cmdbuf = begin();
+    });
+    InvalidateState();
+    prepass_open = true;
+    // Each open is a mesh draw that ended its pass; the other draws continued theirs.
+    ++prepass_opens;
+    if ((prepass_opens & (prepass_opens - 1)) == 0) {
+        LOG_INFO(Render_Vulkan, "Mesh pre-pass: {} mesh draws ended their render pass, {} "
+                                "continued it",
+                 prepass_opens, prepass_commands + 1 - prepass_opens);
+    }
+}
+
+bool Scheduler::HasPrePass(const Framebuffer* framebuffer) const {
+    const VkExtent2D render_area = framebuffer->RenderArea();
+    return prepass_open && state.renderpass && framebuffer->Handle() == state.framebuffer &&
+           render_area.width == state.render_area.width &&
+           render_area.height == state.render_area.height;
 }
 
 bool Scheduler::UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
@@ -938,6 +986,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     }
     EndPendingOperations();
     InvalidateState();
+    prepass_open = false;
 
     const u64 signal_value = master_semaphore->NextTick();
     RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,
@@ -986,6 +1035,9 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
             loss_current = {};
         }
         cmdbuf.End();
+        if (std::exchange(prepass_recording, false)) {
+            prepass_cmdbuf.End();
+        }
 
         if (on_submit) {
             on_submit();
@@ -998,7 +1050,8 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
                                       std::bit_cast<u64>(wait_semaphore)));
         }
         const VkResult submit_result = master_semaphore->SubmitQueue(
-            cmdbuf, upload_cmdbuf, signal_semaphore, wait_semaphore, signal_value);
+            cmdbuf, upload_cmdbuf, earlier_cmdbufs, signal_semaphore, wait_semaphore, signal_value);
+        earlier_cmdbufs.clear();
         if (loss_trace) {
             NoteLossQueue(fmt::format("submitted tick {}: {}", signal_value,
                                       static_cast<int>(submit_result)));
@@ -1069,6 +1122,7 @@ void Scheduler::EndRenderPass()
         ++recording_epoch;
         fragment_barrier.Reset();
         render_pass_has_stores = false;
+        prepass_open = false;
         ++render_pass_serial;
 
         query_cache->CounterClose(VideoCommon::QueryType::StreamingByteCount);

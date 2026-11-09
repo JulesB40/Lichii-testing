@@ -435,6 +435,8 @@ private:
     DescriptorAllocator distribution_allocator;
     std::array<MeshEmulationBuffer, 4> mesh_task_buffers{};
     u32 mesh_capacity{};
+    /// EDEN_NX2_MESH_PREPASS: the programs sample one of the draw's render targets.
+    bool mesh_samples_target{};
 
     std::optional<PipelineBuild> build;
 };

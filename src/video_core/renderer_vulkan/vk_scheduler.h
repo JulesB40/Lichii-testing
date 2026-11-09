@@ -121,6 +121,33 @@ public:
     void RequestOutsideRenderPassOperationContext(
         std::source_location location = std::source_location::current());
 
+    /// Experiment, EDEN_NX2_MESH_PREPASS=1: work a draw needs outside its render pass is recorded
+    /// ahead of the pass instead of ending it. A tile-based GPU stores every attachment when a
+    /// pass ends and loads it back when the pass resumes.
+    [[nodiscard]] bool PrePassEnabled() const noexcept {
+        return prepass_enabled;
+    }
+
+    /// Outside a render pass, right before one begins: ends the current command buffer and begins
+    /// a pre-pass one and a new current one. What RecordPrePass records runs after everything
+    /// recorded so far and before that render pass, until the pass ends. Invalidates the command
+    /// buffer state.
+    void OpenPrePass();
+
+    /// Whether a draw into framebuffer continues a render pass that has a pre-pass.
+    [[nodiscard]] bool HasPrePass(const Framebuffer* framebuffer) const;
+
+    /// Records into the pre-pass command buffer of the render pass.
+    template <typename T>
+        requires std::is_invocable_v<T, vk::CommandBuffer>
+    void RecordPrePass(T&& c) {
+        ++prepass_commands;
+        this->RecordWithUploadBuffer(
+            [this, command = std::move(c)](vk::CommandBuffer, vk::CommandBuffer) {
+                command(prepass_cmdbuf);
+            });
+    }
+
     void DeferFragmentBarrier() {
         fragment_barrier.Defer(state.renderpass != VK_NULL_HANDLE);
     }
@@ -371,7 +398,8 @@ private:
 
     class CommandChunk final {
     public:
-        void ExecuteAll(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf);
+        /// By reference: a command may replace the command buffer for the ones after it.
+        void ExecuteAll(const vk::CommandBuffer& cmdbuf, const vk::CommandBuffer& upload_cmdbuf);
 
         template <typename T>
         bool Record(T& command) {
@@ -545,6 +573,17 @@ private:
 
     vk::CommandBuffer current_cmdbuf;
     vk::CommandBuffer current_upload_cmdbuf;
+    /// Worker thread: the pre-pass command buffer, and this submission's command buffers that
+    /// come before current_cmdbuf, in order.
+    vk::CommandBuffer prepass_cmdbuf;
+    bool prepass_recording{};
+    std::vector<VkCommandBuffer> earlier_cmdbufs;
+
+    bool prepass_enabled{};
+    /// The render pass that began after the last OpenPrePass has not ended.
+    bool prepass_open{};
+    u64 prepass_opens{};
+    u64 prepass_commands{};
 
     DeferredClear deferred_clear;
 

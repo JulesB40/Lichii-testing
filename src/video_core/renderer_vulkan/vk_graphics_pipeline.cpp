@@ -1073,6 +1073,8 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         texture_cache.UpdateRenderTargets(false);
         const std::span<const VideoCommon::ImageViewInOut> view_span{views.data(), views.size()};
         texture_cache.CheckFeedbackLoop(view_span);
+        mesh_samples_target = mesh_emulation && scheduler.PrePassEnabled() &&
+                              texture_cache.SamplesRenderTarget(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
             scheduler.RequestOutsideRenderPassOperationContext();
@@ -1205,6 +1207,8 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed) {
         texture_cache.UpdateRenderTargets(false);
         const std::span<const VideoCommon::ImageViewInOut> view_span{delta_views};
         texture_cache.CheckFeedbackLoop(view_span);
+        mesh_samples_target = mesh_emulation && scheduler.PrePassEnabled() &&
+                              texture_cache.SamplesRenderTarget(view_span);
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
             scheduler.RequestOutsideRenderPassOperationContext();
@@ -1268,15 +1272,27 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     if (mesh_emulation) {
         // The mesh program runs as a compute dispatch outside the render pass and writes the
         // triangles the draw then reads; both use the descriptor set committed here.
-        scheduler.RequestOutsideRenderPassOperationContext();
+        // EDEN_NX2_MESH_PREPASS: the dispatch goes to a command buffer ahead of the render pass,
+        // which later mesh draws then continue instead of ending. Not when a draw of the pass may
+        // write what the programs read (storage, transform feedback, a sampled render target).
+        const bool prepass{scheduler.PrePassEnabled() && !writes_storage && !mesh_samples_target &&
+                           maxwell3d->regs.transform_feedback_enabled == 0};
+        const bool continues_pass{prepass && !scheduler.RenderPassHasStores() &&
+                                  scheduler.HasPrePass(texture_cache.GetFramebuffer())};
+        if (!continues_pass) {
+            scheduler.RequestOutsideRenderPassOperationContext();
+            if (prepass) {
+                scheduler.OpenPrePass();
+            }
+        }
         if (!IsBuilt()) {
             scheduler.Record([this](vk::CommandBuffer) { build->Wait(!worker_only_build); });
         }
-        scheduler.Record([this, descriptor_data, groups = mesh_groups, capacity = mesh_capacity,
-                          task_buffers = mesh_task_buffers,
-                          rescaling_data = rescaling.Data(), is_rescaling = texture_cache.IsRescaling(),
-                          uses_render_area = render_area.uses_render_area,
-                          render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
+        auto dispatch{[this, descriptor_data, groups = mesh_groups, capacity = mesh_capacity,
+                       task_buffers = mesh_task_buffers,
+                       rescaling_data = rescaling.Data(), is_rescaling = texture_cache.IsRescaling(),
+                       uses_render_area = render_area.uses_render_area,
+                       render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
             mesh_descriptor_set = VK_NULL_HANDLE;
             const bool has_task{mesh_emulation->has_task};
             if (!pipeline || !mesh_compute_pipeline || build->Failed() || groups == 0 ||
@@ -1393,7 +1409,12 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             memory_barrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
-        });
+        }};
+        if (prepass) {
+            scheduler.RecordPrePass(std::move(dispatch));
+        } else {
+            scheduler.Record(std::move(dispatch));
+        }
     }
     scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
     if (writes_storage) {

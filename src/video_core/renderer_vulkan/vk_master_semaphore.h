@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <span>
 #include <thread>
 #include <queue>
 
@@ -55,14 +56,16 @@ public:
     void Wait(u64 tick);
 
     /// Submits the device graphics queue, updating the tick as necessary
+    /// Submits upload_cmdbuf, then earlier_cmdbufs in order, then cmdbuf.
     VkResult SubmitQueue(vk::CommandBuffer& cmdbuf, vk::CommandBuffer& upload_cmdbuf,
+                         std::span<const VkCommandBuffer> earlier_cmdbufs,
                          VkSemaphore signal_semaphore, VkSemaphore wait_semaphore, u64 host_tick);
 
 private:
-    VkResult SubmitQueueTimeline(vk::CommandBuffer& cmdbuf, vk::CommandBuffer& upload_cmdbuf,
+    VkResult SubmitQueueTimeline(std::span<const VkCommandBuffer> cmdbufs,
                                  VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                                  u64 host_tick);
-    VkResult SubmitQueueFence(vk::CommandBuffer& cmdbuf, vk::CommandBuffer& upload_cmdbuf,
+    VkResult SubmitQueueFence(std::span<const VkCommandBuffer> cmdbufs,
                               VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
                               u64 host_tick);
 
